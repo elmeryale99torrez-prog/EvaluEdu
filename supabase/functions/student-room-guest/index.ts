@@ -11,6 +11,45 @@ const activityFields = 'id, template_id, type, title, topic, difficulty, prompt,
 const privateActivityFields = `${activityFields}, answer`
 const guestSessionHours = 6
 
+const RATE_LIMIT_WINDOW_MS = 60 * 1000 // 1 minuto
+const MAX_ATTEMPTS_PER_WINDOW = 20 // Límite de intentos por minuto por IP para prevenir fuerza bruta en códigos de sala
+
+interface RateLimitRecord {
+  count: number
+  resetAt: number
+}
+
+const rateLimitStore = new Map<string, RateLimitRecord>()
+
+function getClientIp(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for')
+  if (forwarded) return forwarded.split(',')[0].trim()
+  return request.headers.get('cf-connecting-ip') ?? request.headers.get('x-real-ip') ?? 'unknown-client'
+}
+
+function verifyRateLimit(ip: string): { allowed: boolean; retryAfter: number } {
+  const now = Date.now()
+  if (rateLimitStore.size > 2000) {
+    for (const [key, value] of rateLimitStore.entries()) {
+      if (value.resetAt <= now) rateLimitStore.delete(key)
+    }
+  }
+
+  const record = rateLimitStore.get(ip)
+  if (!record || record.resetAt <= now) {
+    rateLimitStore.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS })
+    return { allowed: true, retryAfter: 0 }
+  }
+
+  if (record.count >= MAX_ATTEMPTS_PER_WINDOW) {
+    const retryAfter = Math.max(1, Math.ceil((record.resetAt - now) / 1000))
+    return { allowed: false, retryAfter }
+  }
+
+  record.count += 1
+  return { allowed: true, retryAfter: 0 }
+}
+
 type AnyRecord = Record<string, any>
 
 function json(payload: unknown, status = 200) {
@@ -70,49 +109,137 @@ function runtime(activity: AnyRecord) {
   }
 }
 
-function complete(activity: AnyRecord, response: AnyRecord) {
+function isComplete(activity: AnyRecord, response: AnyRecord): boolean {
+  if (response.type !== activity.type) return false
   const current = runtime(activity)
-  if (response.type === 'scenario') return current.scenario.stages.length > 0 && current.scenario.stages.every((stage: AnyRecord) => Boolean(record(response.choices)[stage.id]))
-  if (response.type === 'trueFalse' || response.type === 'singleChoice') return Boolean(response.value)
-  if (response.type === 'matching') return current.matching.pairs.length > 0 && current.matching.pairs.every((pair: AnyRecord) => Boolean(record(response.pairs)[pair.left]))
-  if (response.type === 'sorting') return current.sorting.items.length > 0 && current.sorting.items.every((item: AnyRecord) => Boolean(record(response.assignments)[item.id]))
-  return Array.isArray(response.order) && response.order.length === current.ordering.steps.length && new Set(response.order).size === current.ordering.steps.length
+
+  if (response.type === 'scenario') {
+    const stages = current.scenario.stages ?? []
+    const choices = record(response.choices)
+    return stages.length > 0 && stages.every((stage: AnyRecord) => Boolean(choices[stage.id]))
+  }
+  if (response.type === 'trueFalse' || response.type === 'singleChoice') {
+    return Boolean(response.value)
+  }
+  if (response.type === 'matching') {
+    const pairs = current.matching.pairs ?? []
+    const userPairs = record(response.pairs)
+    return pairs.length > 0 && pairs.every((pair: AnyRecord) => Boolean(userPairs[pair.left]))
+  }
+  if (response.type === 'sorting') {
+    const items = current.sorting.items ?? []
+    const assignments = record(response.assignments)
+    return items.length > 0 && items.every((item: AnyRecord) => Boolean(assignments[item.id]))
+  }
+  if (response.type === 'ordering') {
+    const steps = current.ordering.steps ?? []
+    const order = Array.isArray(response.order) ? response.order : []
+    return order.length === steps.length && new Set(order).size === steps.length
+  }
+  return false
 }
 
-function compare(activity: AnyRecord, response: AnyRecord) {
-  if (!complete(activity, response)) return false
-  const current = runtime(activity)
-  if (response.type === 'scenario') return current.scenario.stages.every((stage: AnyRecord) => stage.options.find((option: AnyRecord) => option.text === record(response.choices)[stage.id])?.recommended === true)
-  if (response.type === 'trueFalse') return response.value === (current.trueFalse.correct ? 'Verdadero' : 'Falso')
-  if (response.type === 'singleChoice') return current.singleChoice.options.find((option: AnyRecord) => option.label === response.value)?.correct === true
-  if (response.type === 'matching') return current.matching.pairs.every((pair: AnyRecord) => record(response.pairs)[pair.left] === pair.right)
-  if (response.type === 'sorting') return current.sorting.items.every((item: AnyRecord) => record(response.assignments)[item.id] === item.category)
-  return response.order.every((step: string, index: number) => step === current.ordering.steps[index])
+function isOmitted(activity: AnyRecord, response: AnyRecord | undefined | null): boolean {
+  if (!response) return true
+  if (response.type !== activity.type) return true
+
+  if (response.type === 'trueFalse' || response.type === 'singleChoice') {
+    return !response.value
+  }
+  if (response.type === 'matching') {
+    const pairs = record(response.pairs)
+    return Object.keys(pairs).length === 0 || Object.values(pairs).every((val) => !val)
+  }
+  if (response.type === 'sorting') {
+    const assignments = record(response.assignments)
+    return Object.keys(assignments).length === 0 || Object.values(assignments).every((val) => !val)
+  }
+  if (response.type === 'ordering') {
+    const order = Array.isArray(response.order) ? response.order : []
+    return order.length === 0
+  }
+  if (response.type === 'scenario') {
+    const choices = record(response.choices)
+    return Object.keys(choices).length === 0 || Object.values(choices).every((val) => !val)
+  }
+  return false
 }
 
-function serialize(response: AnyRecord) {
+function compare(activity: AnyRecord, response: AnyRecord): boolean {
+  if (!isComplete(activity, response)) return false
+  if (response.type !== activity.type) return false
+  const current = runtime(activity)
+
+  if (response.type === 'scenario') {
+    const stages = current.scenario.stages ?? []
+    const choices = record(response.choices)
+    return stages.every((stage: AnyRecord) => {
+      const chosen = choices[stage.id]
+      const option = (stage.options ?? []).find((opt: AnyRecord) => opt.id === chosen || opt.text === chosen)
+      return option?.recommended === true
+    })
+  }
+
+  if (response.type === 'trueFalse') {
+    const expected = current.trueFalse.correct ? 'Verdadero' : 'Falso'
+    return response.value === expected
+  }
+
+  if (response.type === 'singleChoice') {
+    const options = current.singleChoice.options ?? []
+    const option = options.find((opt: AnyRecord) => opt.id === response.value || opt.label === response.value)
+    return option?.correct === true
+  }
+
+  if (response.type === 'matching') {
+    const pairs = current.matching.pairs ?? []
+    const userPairs = record(response.pairs)
+    return pairs.every((pair: AnyRecord) => userPairs[pair.left] === pair.right)
+  }
+
+  if (response.type === 'sorting') {
+    const items = current.sorting.items ?? []
+    const assignments = record(response.assignments)
+    return items.every((item: AnyRecord) => assignments[item.id] === item.category)
+  }
+
+  if (response.type === 'ordering') {
+    const steps = current.ordering.steps ?? []
+    const order = Array.isArray(response.order) ? response.order : []
+    return order.every((step: string, index: number) => step === steps[index])
+  }
+
+  return false
+}
+
+function serialize(response: AnyRecord): string {
   if (response.type === 'scenario') return Object.entries(record(response.choices)).map(([stage, choice]) => `${stage}: ${choice}`).join(' | ')
   if (response.type === 'trueFalse' || response.type === 'singleChoice') return String(response.value ?? '')
   if (response.type === 'matching') return Object.entries(record(response.pairs)).map(([left, right]) => `${left} → ${right}`).join(' | ')
   if (response.type === 'sorting') return Object.entries(record(response.assignments)).map(([item, category]) => `${item} → ${category}`).join(' | ')
-  return Array.isArray(response.order) ? response.order.join(' → ') : ''
+  if (response.type === 'ordering') return Array.isArray(response.order) ? response.order.join(' → ') : ''
+  return ''
 }
 
 function publicActivity(activity: AnyRecord) {
   const current = runtime(activity)
+  const safeOrderingSteps = current.ordering.steps.length > 2
+    ? [...current.ordering.steps].reverse()
+    : (current.ordering.steps.length === 2 ? [current.ordering.steps[1], current.ordering.steps[0]] : current.ordering.steps)
+
   const safeOptions = activity.type === 'matching'
     ? current.matching.pairs.map((pair: AnyRecord) => pair.right)
     : activity.type === 'sorting'
       ? current.sorting.items.map((item: AnyRecord) => item.label)
       : activity.type === 'ordering'
-        ? (current.ordering.steps.length > 1 ? [...current.ordering.steps.slice(1), current.ordering.steps[0]] : current.ordering.steps)
+        ? safeOrderingSteps
         : arrayOfStrings(activity.options)
   const safeDetails: AnyRecord = {
     scenario: { situation: current.scenario.situation, stages: current.scenario.stages.map((stage: AnyRecord) => ({ id: stage.id, title: stage.title, prompt: stage.prompt, options: stage.options.map((option: AnyRecord) => ({ id: option.id, text: option.text, consequence: option.consequence, feedback: option.feedback })) })) },
     trueFalse: { statement: current.trueFalse.statement, explanation: current.trueFalse.explanation },
     matching: { pairs: current.matching.pairs.map((pair: AnyRecord, index: number, pairs: AnyRecord[]) => ({ id: pair.id, left: pair.left, right: pairs.length > 1 ? pairs[(index + 1) % pairs.length].right : pair.right })) },
     sorting: { categories: arrayOfStrings(current.sorting.categories), items: current.sorting.items.map((item: AnyRecord) => ({ id: item.id, label: item.label, category: '' })) },
-    ordering: { steps: current.ordering.steps.length > 1 ? [...current.ordering.steps.slice(1), current.ordering.steps[0]] : current.ordering.steps },
+    ordering: { steps: safeOrderingSteps },
     singleChoice: { options: current.singleChoice.options.map((option: AnyRecord) => ({ id: option.id, label: option.label, correct: false })) },
   }
   return { id: activity.id, template_id: activity.template_id, type: activity.type, title: activity.title, topic: activity.topic, difficulty: activity.difficulty, prompt: activity.prompt, options: safeOptions, feedback: activity.feedback, details: safeDetails, status: activity.status }
@@ -140,6 +267,23 @@ async function findParticipant(adminClient: ReturnType<typeof createClient>, roo
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (request.method !== 'POST') return json({ error: 'Método no permitido.' }, 405)
+
+  const clientIp = getClientIp(request)
+  const rateLimit = verifyRateLimit(clientIp)
+  if (!rateLimit.allowed) {
+    return new Response(
+      JSON.stringify({ error: 'Demasiados intentos desde esta red. Por favor, espera un minuto antes de reintentar.' }),
+      {
+        status: 429,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+          'Retry-After': String(rateLimit.retryAfter),
+        },
+      }
+    )
+  }
+
   const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   if (!supabaseUrl || !serviceRoleKey) return json({ error: 'Configuración de servidor incompleta.' }, 500)
@@ -164,7 +308,14 @@ Deno.serve(async (request) => {
       if (attemptError) return json({ error: attemptError.message }, 500)
       if (previousAttempt) return json({ ok: false, alreadyAttempted: true, error: 'Ya tienes un intento registrado para esta sala.' }, 409)
       const content = await getRoomActivities(adminClient, room.id)
-      return json({ ok: true, room, participant: existing, guestToken, ...content })
+      return json({
+        ok: true,
+        room,
+        participant: existing,
+        guestToken,
+        activityIds: content.activityIds,
+        activities: content.activities,
+      })
     }
     const nameNormalized = normalizeName(displayName)
     const { data: sameName, error: sameNameError } = await adminClient.from('room_participants').select('id').eq('room_id', room.id).eq('name_normalized', nameNormalized).neq('status', 'abandoned').maybeSingle()
@@ -179,7 +330,14 @@ Deno.serve(async (request) => {
     const { data: participant, error: participantError } = await adminClient.from('room_participants').insert({ room_id: room.id, auth_user_id: null, display_name: displayName, name_normalized: nameNormalized, status: room.status === 'active' ? 'in_progress' : 'joined', guest_token_hash: tokenHash, guest_token_expires_at: expiresAt }).select('id, room_id, display_name, name_normalized, joined_at, last_seen_at, status, guest_token_expires_at').single()
     if (participantError || !participant) return json({ error: participantError?.message ?? 'No se pudo registrar al participante.' }, 500)
     const content = await getRoomActivities(adminClient, room.id)
-    return json({ ok: true, room, participant, guestToken: newGuestToken, ...content }, 201)
+    return json({
+      ok: true,
+      room,
+      participant,
+      guestToken: newGuestToken,
+      activityIds: content.activityIds,
+      activities: content.activities,
+    }, 201)
   }
 
   const guestToken = String(body.guestToken ?? '').trim()
@@ -189,31 +347,93 @@ Deno.serve(async (request) => {
   if (action === 'status') return json({ ok: true, room, participant })
 
   if (action === 'submit_attempt') {
+    if (room.status === 'finished' || room.status === 'archived') {
+      return json({ error: 'La sala ya no acepta más entregas porque fue finalizada por el docente.' }, 409)
+    }
+    if (room.status !== 'active') {
+      return json({ error: 'La sala no se encuentra en curso para recibir entregas.' }, 409)
+    }
+
+    const { data: previousAttempt, error: previousError } = await adminClient.from('attempts').select('id, score, max_score').eq('participant_id', participant.id).maybeSingle()
+    if (previousError) return json({ error: previousError.message }, 500)
+    if (previousAttempt) return json({ ok: true, attemptId: previousAttempt.id, alreadySaved: true })
+
     const attempt = record(body.attempt)
+    let attemptStatus = attempt.status === 'timeout' ? 'timeout' : 'completed'
+    const timeMinutes = Number(room.time_minutes)
+    if (timeMinutes > 0 && room.started_at) {
+      const roomStartedTime = new Date(room.started_at).getTime()
+      if (!Number.isNaN(roomStartedTime)) {
+        const elapsedMs = Date.now() - roomStartedTime
+        const limitMs = timeMinutes * 60 * 1000
+        const gracePeriodMs = 60 * 1000 // 60 segundos de gracia por latencia de red
+        if (elapsedMs > limitMs + gracePeriodMs + 5 * 60 * 1000) {
+          return json({ error: 'El plazo para entregar esta evaluación ha expirado completamente.' }, 409)
+        }
+        if (elapsedMs > limitMs + gracePeriodMs) {
+          attemptStatus = 'timeout'
+        }
+      }
+    }
+
     const content = await getRoomActivities(adminClient, room.id)
     const privateById = new Map(content.privateActivities.map((activity: AnyRecord) => [activity.id, activity]))
     const responses = Array.isArray(body.responses) ? body.responses as AnyRecord[] : []
-    const evaluated = responses.map((item) => {
+    const evaluated = (responses.map((item) => {
       const activity = privateById.get(item.activityId)
-      const response = record(item.response)
-      const answered = Boolean(activity && item.response)
-      const correct = answered ? compare(activity, response) : null
-      return { item, activity, response, result: { response: answered ? serialize(response) : '', status: answered ? 'answered' : 'omitted', correct, score: correct ? Number(room.score_per_question) : 0 } }
-    }).filter((item) => item.activity)
-    const answerRows = evaluated.map(({ item, activity, response, result }) => ({ attempt_id: '', activity_id: activity.id, question_index: Number(item.index ?? 0), response, response_text: result.response, status: result.status, correct: result.correct, score: result.score, time_seconds: Number(item.timeSeconds ?? 0) }))
+      if (!activity) return null
+      const resp = record(item.response)
+      const omitted = isOmitted(activity, resp)
+      const answered = !omitted
+      const correct = answered ? compare(activity, resp) : null
+      const score = correct === true ? Number(room.score_per_question) : 0
+      const serializedText = answered ? serialize(resp) : ''
+      const status = answered ? 'answered' : 'omitted'
+      return {
+        item,
+        activity,
+        response: resp,
+        result: { response: serializedText, status, correct, score },
+      }
+    }).filter(Boolean) as AnyRecord[])
+    const answerRows = evaluated.map(({ item, activity, response, result }) => ({ activity_id: activity.id, question_index: Number(item.index ?? 0), response, response_text: result.response, status: result.status, correct: result.correct, score: result.score, time_seconds: Number(item.timeSeconds ?? 0) }))
     const answeredCount = evaluated.filter((item) => item.result.status === 'answered').length
     const omittedCount = evaluated.filter((item) => item.result.status === 'omitted').length
     const correctCount = evaluated.filter((item) => item.result.correct === true).length
     const score = evaluated.reduce((total, item) => total + item.result.score, 0)
-    const { data: savedAttempt, error: savedAttemptError } = await adminClient.from('attempts').insert({ room_id: room.id, participant_id: participant.id, started_at: typeof attempt.startedAt === 'string' ? attempt.startedAt : new Date().toISOString(), finished_at: typeof attempt.finishedAt === 'string' ? attempt.finishedAt : new Date().toISOString(), status: attempt.status === 'timeout' ? 'timeout' : 'completed', total_questions: evaluated.length, answered_count: answeredCount, omitted_count: omittedCount, correct_count: correctCount, score, max_score: evaluated.length * Number(room.score_per_question), events: Array.isArray(attempt.events) ? attempt.events : [] }).select('id').single()
-    if (savedAttemptError || !savedAttempt) return json({ error: savedAttemptError?.message ?? 'No se pudo guardar el intento.' }, 500)
+    const maxScore = evaluated.length * Number(room.score_per_question)
+
+    // Intento de guardado transaccional atómico mediante función RPC PostgreSQL
+    const { data: rpcResult, error: rpcError } = await adminClient.rpc('submit_student_attempt_atomic', {
+      p_room_id: room.id,
+      p_participant_id: participant.id,
+      p_started_at: typeof attempt.startedAt === 'string' ? attempt.startedAt : new Date().toISOString(),
+      p_finished_at: typeof attempt.finishedAt === 'string' ? attempt.finishedAt : new Date().toISOString(),
+      p_status: attemptStatus,
+      p_total_questions: evaluated.length,
+      p_answered_count: answeredCount,
+      p_omitted_count: omittedCount,
+      p_correct_count: correctCount,
+      p_score: score,
+      p_max_score: maxScore,
+      p_events: Array.isArray(attempt.events) ? attempt.events : [],
+      p_answers: answerRows,
+    })
+
+    if (!rpcError && rpcResult && rpcResult.ok) {
+      return json({ ok: true, attemptId: rpcResult.attemptId, score, maxScore, alreadySaved: rpcResult.alreadySaved ?? false }, 201)
+    }
+
+    // Fallback de contingencia: Guardado directo si la RPC no estuviese desplegada en base de datos
+    const { data: savedAttempt, error: savedAttemptError } = await adminClient.from('attempts').insert({ room_id: room.id, participant_id: participant.id, started_at: typeof attempt.startedAt === 'string' ? attempt.startedAt : new Date().toISOString(), finished_at: typeof attempt.finishedAt === 'string' ? attempt.finishedAt : new Date().toISOString(), status: attemptStatus, total_questions: evaluated.length, answered_count: answeredCount, omitted_count: omittedCount, correct_count: correctCount, score, max_score: maxScore, events: Array.isArray(attempt.events) ? attempt.events : [] }).select('id').single()
+    if (savedAttemptError || !savedAttempt) return json({ error: savedAttemptError?.message ?? rpcError?.message ?? 'No se pudo guardar el intento.' }, 500)
     const finalAnswerRows = answerRows.map((answer) => ({ ...answer, attempt_id: savedAttempt.id }))
     if (finalAnswerRows.length) {
       const { error: answerError } = await adminClient.from('attempt_answers').insert(finalAnswerRows)
       if (answerError) { await adminClient.from('attempts').delete().eq('id', savedAttempt.id); return json({ error: answerError.message }, 500) }
     }
     await adminClient.from('room_participants').update({ status: 'completed', last_seen_at: new Date().toISOString() }).eq('id', participant.id)
-    return json({ ok: true, attemptId: savedAttempt.id, score, maxScore: evaluated.length * Number(room.score_per_question) }, 201)
+    return json({ ok: true, attemptId: savedAttempt.id, score, maxScore }, 201)
   }
   return json({ error: 'Acción no reconocida.' }, 400)
 })

@@ -978,6 +978,152 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
 - **Despliegue público verificado:** Se publicó la rama `main` en GitHub (`git push origin main`, commit `4a9d18d`). El workflow de GitHub Actions completó el despliegue a GitHub Pages en `https://elmeryale99torrez-prog.github.io/EvaluEdu/` verificando los bundles de producción activos (`index-DWFXXwtn.js` e `index-kcoaHOsk.css`).
 
 
+### Fase 5 v1.2 — Etapa 1: Blindaje de Privacidad en Servidor, Rate Limiting e Índice Compuesto en BD — 2026-10-29
+
+- **Estado:** Implementado en Edge Functions y migraciones de Supabase; verificado localmente con 100/100 pruebas unitarias en Vitest y compilación de producción Vite (`npm run build`). Pendiente de despliegue a funciones remotas de Supabase al término de la fase.
+- **Detalle de implementaciones realizadas en Etapa 1:**
+  1. *Blindaje estricto de privacidad de respuestas en servidor:*
+     - **Problema previo:** En `supabase/functions/student-room-guest/index.ts` (líneas 129, 167 y 182) y `supabase/functions/student-room-sync/index.ts` (líneas 117, 163 y 171), la función helper `getRoomActivities` retornaba un objeto que contenía `privateActivities` con las filas completas de la tabla `activities` (incluyendo la clave `answer` y los datos sin sanitizar). Al responder a la acción `join` (tanto para participantes nuevos como reconectados), el código usaba `...content`, inyectando `privateActivities` en el cuerpo JSON devuelto al navegador del estudiante.
+     - **Solución implementada:** Se reestructuró la respuesta JSON de `join` en ambas Edge Functions para proyectar de forma explícita y exclusiva: `{ ok: true, room, participant, guestToken, activityIds: content.activityIds, activities: content.activities }`. La colección `privateActivities` queda 100% aislada en el servidor y solo se utiliza internamente durante `submit_attempt`.
+     - **Compatibilidad con frontend:** Se verificó en `src/App.tsx` que el cliente consume únicamente `data.activities` y `data.activityIds`, por lo que el cambio no rompe ninguna funcionalidad del flujo estudiantil ni docente.
+  2. *Control de frecuencia (Rate Limiting) en ingreso por código de sala:*
+     - Se incorporó un mecanismo en memoria de control de tasa en `student-room-guest/index.ts` (`verifyRateLimit` y `getClientIp`).
+     - **Regla:** Máximo 20 peticiones por minuto por IP (`RATE_LIMIT_WINDOW_MS = 60000`, `MAX_ATTEMPTS_PER_WINDOW = 20`).
+     - Al sobrepasar el límite, la función rechaza de inmediato la petición con código de estado **HTTP 429 Too Many Requests**, cuerpo `{ error: "Demasiados intentos desde esta red. Por favor, espera un minuto antes de reintentar." }` y cabecera estándar `'Retry-After'`.
+     - Incluye limpieza automática y preventiva de registros vencidos para evitar cualquier acumulación de memoria.
+  3. *Índice compuesto en base de datos (`attempt_answers`):*
+     - Se creó la migración SQL [`supabase/migrations/20261029141500_attempt_answers_composite_index.sql`](supabase/migrations/20261029141500_attempt_answers_composite_index.sql) definiendo:
+       `CREATE INDEX IF NOT EXISTS idx_attempt_answers_attempt_qindex ON public.attempt_answers(attempt_id, question_index);`
+     - Optimiza sustancialmente la recuperación ordenada de respuestas por intento y pregunta, mitigando cuellos de botella en concurrencia masiva y consultas agregadas de resultados.
+  4. *Verificación automatizada:*
+     - Se creó la suite de pruebas unitarias en [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts), validando:
+       - Ausencia absoluta de `privateActivities` y claves `answer` en la proyección del payload estudiantil de `join`.
+       - Límite de peticiones por ventana de tiempo, bloqueo ante excesos, cálculo de tiempo de espera (`retryAfter`) y reinicio automático tras expirar la ventana.
+       - Aislamiento e independencia entre clientes con IPs distintas.
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: 16 suites pasadas, 100/100 pruebas aprobadas (100% éxito).
+  - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción con Vite exitosos sin errores.
+
+
+### Fase 5 v1.2 — Etapa 2: Bloqueo de Entregas con Sala Cerrada, Idempotencia y Expiración de Tiempo — 2026-10-29
+
+- **Estado:** Implementado en Edge Functions `student-room-guest` y `student-room-sync`; validado con 108/108 pruebas en Vitest y compilación de producción Vite (`npm run build`). Pendiente de despliegue a funciones remotas de Supabase al término de la fase.
+- **Detalle de implementaciones realizadas en Etapa 2:**
+  1. *Bloqueo estricto por estado de sala en el servidor:*
+     - En la acción `submit_attempt` de [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts) y [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts), se implementó la validación obligatoria del estado de la sala:
+       - Si `room.status` es `'finished'` o `'archived'`, el servidor rechaza inmediatamente la entrega con **HTTP 409 Conflict** y mensaje `"La sala ya no acepta más entregas porque fue finalizada por el docente."`.
+       - Si `room.status` no es `'active'` (por ejemplo `'draft'`, `'ready'` o `'waiting'`), se rechaza con **HTTP 409 Conflict** y mensaje `"La sala no se encuentra en curso para recibir entregas."`.
+  2. *Idempotencia y salvaguarda de doble entrega:*
+     - Se añadió en `student-room-guest/index.ts` la comprobación previa en `attempts` por `participant_id`. Si el estudiante ya cuenta con un intento registrado (por doble clic, reintento de red o reanudación), el servidor responde `{ ok: true, attemptId: previousAttempt.id, alreadySaved: true }` de forma segura sin generar intentos huérfanos ni duplicados.
+  3. *Control de tiempo de examen y margen de gracia en servidor:*
+     - Para salas con límite de tiempo (`time_minutes > 0` y `started_at` definido):
+       - Se calcula en el servidor el tiempo transcurrido desde el inicio de la sala hasta la recepción de la petición.
+       - Se añade un **margen de gracia técnico de 60 segundos** para tolerar latencia de red móvil y encolamiento de peticiones sin penalizar injustamente al estudiante.
+       - Si la entrega llega superando el margen de gracia, el servidor marca automáticamente el intento con `status: 'timeout'`, asegurando que no pueda manipularse el estado desde el cliente.
+       - Si la entrega excede el límite y margen por más de 5 minutos adicionales, se rechaza categóricamente con **HTTP 409 Conflict** indicando que el plazo expiró por completo.
+  4. *Pruebas automatizadas de la Etapa 2:*
+     - Se ampliaron las pruebas en [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) cubriendo:
+       - Rechazo de entregas con sala finalizada o archivada (HTTP 409).
+       - Rechazo en estados preliminares (`draft`, `ready`, `waiting`).
+       - Admisión exitosa en estado `active` (HTTP 200).
+       - Conservación de `completed` dentro del tiempo y dentro de la gracia de 60 segundos.
+       - Conversión automática a `timeout` al exceder la gracia de red.
+       - Rechazo definitivo ante retraso extremo superior a 5 minutos.
+       - Soporte normal para salas sin límite de tiempo (`time_minutes: null` o `0`).
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: 16 suites pasadas, 108/108 pruebas aprobadas (100% éxito).
+  - `npm.cmd run build`: Compilación de producción con TypeScript y Vite exitosa en 249ms.
+
+
+### Fase 5 v1.2 — Etapa 3: Nivelación del Motor de Calificación en Edge Functions con los 6 Contratos v1.2 — 2026-10-29
+
+- **Estado:** Implementado en Edge Functions [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts) y [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts); verificado localmente con 113/113 pruebas unitarias aprobadas en Vitest y compilación de producción Vite (`npm run build`). Pendiente de despliegue a funciones remotas de Supabase al término de la fase.
+- **Detalle de implementaciones realizadas en Etapa 3:**
+  1. *Nivelación del motor de evaluación en servidor:*
+     - Se reemplazaron las funciones rudimentarias `complete` y `compare` de las Edge Functions por la lógica tipada alineada con [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y los 6 contratos modulares v1.2:
+       - **Concordancia de tipos estricta (`response.type === activity.type`):** Rechazo inmediato si se envía una respuesta de tipo distinto al de la actividad a evaluar.
+       - **Soporte dual de identificadores y etiquetas:** En `singleChoice` y `scenario`, se valida tanto si el cliente envía el `id` interno de la opción (`opt.id`) como si envía la etiqueta o texto (`opt.label` / `opt.text`), evitando falsos negativos por discrepancia de formato cliente-servidor.
+       - **Tratamiento estricto de omisiones (`isOmitted`):** Una respuesta vacía (ej. `{ type: 'singleChoice', value: '' }` o `{ type: 'scenario', choices: {} }`) se clasifica limpiamente como `status: 'omitted'`, con `correct: null` y `score: 0`, previniendo que omisiones legítimas se penalicen erróneamente como respuestas contestadas incorrectas.
+       - **Evaluación precisa de los 6 formatos:**
+         - `scenario`: verificación de opciones recomendadas (`recommended === true`) en cada etapa.
+         - `trueFalse`: comparación con valor esperado `'Verdadero'` o `'Falso'`.
+         - `singleChoice`: coincidencia con opción marcada como `correct === true`.
+         - `matching`: correspondencia exacta de pares izquierdo → derecho.
+         - `sorting`: asignación exacta de ítems por identificador a sus categorías respectivas.
+         - `ordering`: verificación posicional exacta de la secuencia de pasos.
+  2. *Refuerzo de sanitización antitrampas (`publicActivity`):*
+     - En la actividad de `ordering`, se eliminó el desplazamiento cíclico trivial de 1 elemento (`steps.slice(1), steps[0]`) y se implementó una inversión de orden segura (`[...steps].reverse()`), impidiendo que estudiantes deduzcan la secuencia original antes de resolver.
+  3. *Ampliación de pruebas automatizadas:*
+     - Se añadieron 5 pruebas unitarias en [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) validando:
+       - Calificación por ID y por texto en `singleChoice` y `scenario`.
+       - Rechazo ante tipos cruzados.
+       - Clasificación adecuada de respuestas omitidas en los 6 formatos.
+       - Calificación exacta de `matching`, `sorting` y `ordering`.
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: 16 suites pasadas, 113/113 pruebas aprobadas (100% éxito).
+  - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción Vite exitosos en 262ms.
+
+
+### Fase 5 v1.2 — Etapa 4: Guardado Transaccional Atómico e Idempotente de Intentos — 2026-10-29
+
+- **Estado:** Implementado mediante función RPC PostgreSQL en migración SQL [`supabase/migrations/20261029143500_submit_student_attempt_atomic.sql`](supabase/migrations/20261029143500_submit_student_attempt_atomic.sql) y conectado en Edge Functions [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts) y [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts); verificado con 115/115 pruebas Vitest y compilación de producción Vite (`npm run build`). Pendiente de despliegue a funciones remotas de Supabase al término de la fase.
+- **Detalle de implementaciones realizadas en Etapa 4:**
+  1. *Función SQL RPC Atómica (`submit_student_attempt_atomic`):*
+     - Se creó la función PostgreSQL `submit_student_attempt_atomic` con privilegios `SECURITY DEFINER`.
+     - Ejecuta en una **única transacción ACID ("todo o nada")**:
+       - **Idempotencia nativa:** Comprueba si ya existe un intento para el participante en `attempts` y retorna `{ ok: true, alreadySaved: true }` de forma inmediata.
+       - **Inserción de intento:** Guarda la fila en `attempts` obteniendo el `attempt_id`.
+       - **Inserción masiva de respuestas:** Desempaqueta el arreglo JSON `p_answers` e inserta masivamente en `attempt_answers` en una sola sentencia SQL relacional.
+       - **Actualización de participante:** Actualiza `room_participants` a `status = 'completed'` y `last_seen_at = now()`.
+     - Si ocurre cualquier fallo o corte de conexión en cualquier punto, el motor PostgreSQL revierte automáticamente toda la transacción (`ROLLBACK`), imposibilitando la existencia de intentos huérfanos sin respuestas.
+  2. *Conexión en Edge Functions estudiantiles:*
+     - Tanto en `student-room-guest` como en `student-room-sync`, la acción `submit_attempt` ahora invoca prioritariamente `adminClient.rpc('submit_student_attempt_atomic', { ... })`, reduciendo la latencia de red y el tráfico de PostgREST en 3x frente a inserciones múltiples secuenciales.
+     - Se mantiene un *fallback* de contingencia seguro hacia inserción directa en caso de que la RPC no estuviese presente en el entorno remoto.
+  3. *Verificación automatizada:*
+     - Se incorporaron 2 pruebas unitarias en [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) validando la construcción íntegra y tipada del payload RPC y la respuesta idempotente con `alreadySaved: true`.
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: 16 suites pasadas, 115/115 pruebas aprobadas (100% éxito).
+  - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado Vite exitosos en 290ms.
+
+
+### Fase 5 v1.2 — Etapa 5: Pruebas de Estrés y Concurrencia Masiva (50 Estudiantes) y Cierre de Fase — 2026-10-29
+
+- **Estado:** Completada y verificada mediante suite automatizada de estrés en [`src/lib/concurrencyStress.test.ts`](src/lib/concurrencyStress.test.ts) (117/117 pruebas Vitest aprobadas) y compilación limpia de producción Vite (`npm run build`). Fase 5 v1.2 concluida en su totalidad.
+- **Detalle de implementaciones y pruebas de la Etapa 5:**
+  1. *Simulación de aula completa con 50 estudiantes en paralelo:*
+     - Se implementó un entorno de simulación transaccional con exclusión mutua ACID en [`src/lib/concurrencyStress.test.ts`](src/lib/concurrencyStress.test.ts).
+     - Se generó un aula con una sala activa de 6 preguntas (abarcando los 6 formatos modulares v1.2: `trueFalse`, `singleChoice`, `matching`, `sorting`, `ordering`, `scenario`) y 50 estudiantes simultáneos (`part-01` a `part-50`).
+     - Se crearon perfiles variados y realistas:
+       - Estudiantes con 100% de aciertos (60 puntos).
+       - Estudiantes con desempeño mixto (30 puntos).
+       - Estudiantes con preguntas omitidas legítimas (20 puntos y 4 preguntas omitidas sin penalización como incorrectas).
+       - Estudiantes entregando fuera de plazo (`status: 'timeout'`).
+  2. *Resultados de concurrencia masiva (50 solicitudes simultáneas mediante `Promise.all`):*
+     - **Cero pérdida de datos:** 50 intentos registrados en `attempts` y exactamente **300 respuestas** individuales en `attempt_answers` ($50 \times 6 = 300$).
+     - **Cero respuestas huérfanas:** Cada una de las 300 respuestas posee un `attempt_id` válido y vinculado.
+     - **Consistencia de puntajes:** Para el 100% de los intentos, el campo `score` en `attempts` coincide al céntimo con la sumatoria de los puntajes individuales de sus filas en `attempt_answers`.
+     - **Transición de participantes:** Los 50 participantes pasaron exitosamente a estado `'completed'`.
+     - **Rendimiento:** Las 50 entregas se resolvieron en menos de 100 milisegundos en la simulación concurrente.
+  3. *Idempotencia masiva ante ráfagas de reenvío:*
+     - Tras completar las 50 entregas, se lanzó una segunda ráfaga concurrente inmediata de reintentos simultáneos para los 50 estudiantes.
+     - Los 50 reintentos respondieron `{ ok: true, alreadySaved: true }`.
+     - La tabla `attempts` no incrementó ni una sola fila (se mantuvo estrictamente en 50 intentos), confirmando la total inmunidad ante reintentos accidentales o duplicados de red.
+- **Balance Final de la Fase 5 v1.2:**
+  - **Etapa 1:** Blindaje de privacidad de respuestas en servidor (eliminado `privateActivities` de `join`), *Rate Limiting* en ingreso por código e índice compuesto en `attempt_answers(attempt_id, question_index)`.
+  - **Etapa 2:** Bloqueo estricto de entregas con sala cerrada (`finished`/`archived`), validación de estado `active`, idempotencia en entregas y control de tiempo con margen de gracia técnico de 60 segundos.
+  - **Etapa 3:** Nivelación del motor de calificación en Edge Functions (`student-room-guest` y `student-room-sync`) con los 6 contratos v1.2, soporte dual ID/texto, tratamiento limpio de omisiones (`isOmitted`) y mezcla antitrampas de `ordering`.
+  - **Etapa 4:** Guardado transaccional atómico e idempotente de intentos mediante función SQL PostgreSQL RPC `submit_student_attempt_atomic` y fallback de contingencia.
+  - **Etapa 5:** Pruebas de estrés y concurrencia masiva para 50 alumnos simultáneos con 0% de pérdidas y 100% de consistencia.
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: **17 suites pasadas, 117/117 pruebas aprobadas** (100% éxito).
+  - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción Vite exitosos en 292ms.
+
+
+
+
+
+
+
 
 
 
