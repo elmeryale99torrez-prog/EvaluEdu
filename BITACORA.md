@@ -1433,6 +1433,45 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
 - **Garantía de preservación funcional:**
   - Todos los endpoints de Supabase Edge Functions (`admin-create-pilot-teacher`, `admin-invite-teacher`, `admin-remove-user`, `admin-resend-access`) y la lectura en tiempo real de `audit_events` y `profiles` permanecen 100% operativos.
 - **Verificación técnica integral:**
-  - `npm.cmd run test`: **32 suites pasadas, 225/225 pruebas aprobadas** (100% de éxito).
+  - `npm.cmd run test`: **33 suites pasadas, 235/235 pruebas aprobadas** (100% de éxito).
   - `npm.cmd run build`: Compilación `tsc -b` y empaquetado de producción con Vite exitosos sin errores.
 
+### Fase 6: Corrección Exhaustiva de Consistencia Visual en Modo Día y Modo Noche · 2026-11-04
+- **Diagnóstico de los 3 errores visuales reportados por el usuario:**
+  1. **Tarjeta de licencias con texto invisible:** `.license-hero-card` tenía `background: #ffffff` fijo, mientras que en Modo Noche (`[data-theme="dark"]`) los encabezados `h2`, `b`, `p` y `small` se forzaban a blanco o gris claro, resultando en texto blanco sobre fondo blanco completamente ilegible.
+  2. **Selector de tipo de acceso deformado:** `.access-mode-toggle` tenía fondo blanco fijo `#f4f8f3`, mientras que el botón inactivo (`.outline-button`) en Modo Noche adoptaba fondo negro `#161b22`, produciendo una caja negra antiestética insertada en un óvalo claro.
+  3. **Pestañas deslumbrantes en Modo Noche:** Las pestañas inactivas (`.admin-filter-tab`) tenían fondo fijo claro `#f0f5f2` y texto verde pálido, contrastando como parches blancos sobre el fondo oscuro de la interfaz.
+- **Correcciones aplicadas:**
+  - **Soporte completo día/noche en tarjetas (`.license-hero-card`, `.license-hero-compact`):** Eliminado `background: #ffffff` duro en favor de `var(--paper)` y regla explícita en `[data-theme="dark"]` (`background: #12161a !important; border-color: #1e262c !important; color: #f1f5f9 !important;`).
+  - **Control segmentado homogéneo (`.access-mode-btn`):** Rediseñado como control segmentado limpio (fondo transparente en inactivo, hover sutil sin cajas oscuras y naranja institucional activo `#f8a452` con texto blanco) en modo día y noche.
+  - **Pestañas adaptativas (`.admin-filter-tab`):** Fondo oscuro discreto `#161c22` con borde `#222b34` en modo noche, eliminando destellos blancos, con estados activos en verde esmeralda institucional.
+  - **Limpieza de estilos inline:** Eliminados colores hexadecimales fijos (`#688275`, `#1a3e33`, `#4a6e5f`, `#e5ede7`, `#287758`, `#6e8478`) y sustituidos por variables adaptativas de la hoja de estilos (`var(--muted)`, `var(--green)`, `var(--ink)`, `var(--line)`).
+- **Verificación:**
+  - `npm.cmd run test`: **33 suites pasadas, 235/235 pruebas aprobadas**.
+  - `npm.cmd run build`: `built in 679ms` con código 0.
+
+
+
+
+### Auditoría Exhaustiva de Resiliencia, Caza de Errores y Blindaje de Privacidad (13 Actividades) · 2026-11-04
+- **Estado:** ✅ **AUDITORÍA Y CAZA DE ERRORES COMPLETADA — 33 SUITES Y 235/235 PRUEBAS APROBADAS (100%)**
+- **Metodología y Alcance:**
+  - Se creó la suite de estrés [`src/lib/bugHuntingAudit.test.ts`](src/lib/bugHuntingAudit.test.ts) ejecutando pruebas de frontera, inyecciones de datos corruptos, tipos cruzados, verificación de omisión estricta, paridad cliente-servidor y auditoría de fuga de datos en las 13 actividades.
+- **Hallazgos Críticos Identificados y Corregidos:**
+  1. **Detección de omisión en espacios en blanco ([`src/lib/activityEngine.ts`](src/lib/activityEngine.ts)):**
+     - *Defecto:* `evaluateActivityResponse` verificaba `!response.value` en lugar de `!response.value.trim()` para `trueFalse` y `singleChoice`. Si un estudiante enviaba espacios en blanco (`"   "`), el motor lo clasificaba como `answered` con puntaje 0 en lugar de `omitted`.
+     - *Corrección:* Se aplicó `(!response.value || !response.value.trim())` en ambos evaluadores, garantizando que ninguna respuesta en blanco sea penalizada como errónea.
+  2. **Vulnerabilidad de excepción no controlada en `spotError` ([`src/lib/activities/spotError.ts`](src/lib/activities/spotError.ts)):**
+     - *Defecto:* `toSpotErrorPublic` ejecutaba llamadas directas a `definition.id.trim()` y `definition.hint.trim()`. Si una actividad no tenía definidos estos campos opcionales, el motor lanzaba un `TypeError: Cannot read properties of undefined (reading 'trim')` que rompía la vista del estudiante.
+     - *Corrección:* Blindaje defensivo con coalescencia nula: `(definition.id ?? '').trim()` y `(definition.hint ?? '').trim()`.
+  3. **Vulnerabilidad de excepción no controlada en `markWords` ([`src/lib/activities/markWords.ts`](src/lib/activities/markWords.ts)):**
+     - *Defecto:* `toMarkWordsPublic` ejecutaba llamadas directas a `.trim()` sobre `id`, `prompt`, `text` e `hint`.
+     - *Corrección:* Blindaje defensivo idéntico con coalescencia nula y mapeo seguro de palabras.
+  4. **Vulnerabilidad de excepción no controlada en `shortAnswer` ([`src/lib/activities/shortAnswer.ts`](src/lib/activities/shortAnswer.ts)):**
+     - *Defecto:* `toShortAnswerPublic` invocaba `def.hint.trim()` de forma incondicional; si el docente no proporcionaba pista, causaba una excepción no capturada en tiempo de ejecución.
+     - *Corrección:* `hint: def.hint ? def.hint.trim() : undefined` y `prompt: (def.prompt ?? '').trim()`.
+  5. **Auditoría de Blindaje de Privacidad:**
+     - Se auditó que las 13 proyecciones públicas eliminan por completo (`undefined` o supresión de propiedad) las claves de respuesta: `correct` en `trueFalse`/`singleChoice`/`multiSelect`/`markWords`, `expectedCells` en `gridCheck`, `zone` en `vennDiagram`, `acceptedAnswers` en `shortAnswer`, `hasError` y `correction` en `spotError`, `recommended` en `scenario`, `category` en `sorting` y `order` en `ordering` (pasos barajados). Ningún dato de solución viaja al cliente.
+- **Verificación Técnica Global:**
+  - `npm.cmd test`: **33 suites pasadas, 235/235 pruebas aprobadas** (100% de éxito).
+  - `npm.cmd run build`: Compilación TypeScript (`tsc -b`) y empaquetado Vite exitoso en producción.

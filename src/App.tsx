@@ -2340,18 +2340,18 @@ function AdminDashboard({
                       <tr key={inst.id}>
                         <td>
                           <b>{inst.name}</b>
-                          <small style={{ display: 'block', color: '#688275' }}>Código: {inst.code}</small>
+                          <small style={{ display: 'block' }}>Código: {inst.code}</small>
                         </td>
                         <td>{inst.planName}</td>
                         <td>
                           <strong>{inst.activeLicenses} de {inst.licenseLimit}</strong>
-                          <small style={{ display: 'block', color: '#688275' }}>
+                          <small style={{ display: 'block' }}>
                             {Math.max(0, inst.licenseLimit - inst.activeLicenses)} disponibles
                           </small>
                         </td>
                         <td>
                           <b>{inst.contactName}</b>
-                          <small style={{ display: 'block', color: '#688275' }}>{inst.contactEmail}</small>
+                          <small style={{ display: 'block' }}>{inst.contactEmail}</small>
                         </td>
                         <td>{inst.validUntil}</td>
                         <td>
@@ -2430,8 +2430,8 @@ function AdminDashboard({
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e5ede7', paddingTop: '12px' }}>
-              <small style={{ color: '#557766' }}>
+            <div className="license-hero-footer">
+              <small>
                 Código: {activeInstitution.code} · Plan: {activeInstitution.planName}
               </small>
               <button
@@ -2835,20 +2835,20 @@ function AdminUsersView({
             }
           />
 
-          <div className="license-hero-card" style={{ marginBottom: '16px', padding: '14px 18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <div className="license-hero-card license-hero-compact">
+            <div className="license-compact-inner">
               <div>
-                <b style={{ fontSize: '13px', color: '#1a3e33' }}>
-                  Licencias institucionales ({institution.planName}):
+                <b className="license-compact-title">
+                  Licencias institucionales ({institution.planName})
                 </b>
-                <div style={{ fontSize: '12px', color: '#4a6e5f', marginTop: '2px' }}>
-                  <b>{activeCount}</b> de <b>{institution.licenseLimit}</b> asignadas ·
-                  <span style={{ color: availableLicenses > 0 ? '#287758' : '#c47a18', fontWeight: 'bold', marginLeft: '5px' }}>
+                <div className="license-compact-meta">
+                  <b>{activeCount}</b> de <b>{institution.licenseLimit}</b> asignadas ·{' '}
+                  <span className={`license-compact-status ${availableLicenses > 0 ? 'available' : 'exhausted'}`}>
                     {availableLicenses > 0 ? `${availableLicenses} disponibles` : 'Sin cupos disponibles'}
                   </span>
                 </div>
               </div>
-              <div className="license-track" style={{ width: '220px', height: '8px' }}>
+              <div className="license-track license-compact-track">
                 <div
                   className={`license-fill ${activeCount >= institution.licenseLimit ? 'full' : ''}`}
                   style={{ width: `${Math.min(100, (activeCount / institution.licenseLimit) * 100)}%` }}
@@ -2957,7 +2957,7 @@ function AdminUsersView({
                               <button
                                 type="button"
                                 className="text-button"
-                                style={{ color: '#287758' }}
+                                style={{ color: 'var(--green)' }}
                                 disabled={removingId === user.id}
                                 onClick={() => void handleToggleRealUser(user, 'enable')}
                               >
@@ -2990,7 +2990,7 @@ function AdminUsersView({
                               <button
                                 type="button"
                                 className="text-button"
-                                style={{ color: '#287758' }}
+                                style={{ color: 'var(--green)' }}
                                 onClick={() => onToggleTeacherStatus(user, 'enable')}
                               >
                                 Reactivar
@@ -3012,7 +3012,7 @@ function AdminUsersView({
                 })
               ) : (
                 <tr>
-                  <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#688275' }}>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: 'var(--muted)' }}>
                     {userSource === 'platform' && !adminData
                       ? 'Cargando usuarios…'
                       : 'No se encontraron docentes con los filtros aplicados.'}
@@ -3044,14 +3044,14 @@ function AdminUsersView({
             <div className="access-mode-toggle" role="tablist" aria-label="Tipo de acceso">
               <button
                 type="button"
-                className={accessMode === 'pilot' ? 'primary-button' : 'outline-button'}
+                className={`access-mode-btn ${accessMode === 'pilot' ? 'active' : ''}`}
                 onClick={() => { setStatus(null); setAccessMode('pilot') }}
               >
                 Contraseña directa
               </button>
               <button
                 type="button"
-                className={accessMode === 'invite' ? 'primary-button' : 'outline-button'}
+                className={`access-mode-btn ${accessMode === 'invite' ? 'active' : ''}`}
                 onClick={() => { setStatus(null); setAccessMode('invite') }}
               >
                 Invitación por correo
@@ -3262,7 +3262,7 @@ function AdminAuditView({
                     <small>{log.detail}</small>
                   </div>
                 </div>
-                <time style={{ fontSize: '11px', color: '#6e8478', whiteSpace: 'nowrap' }}>
+                <time style={{ fontSize: '11px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
                   {formatDateTime(log.at)}
                 </time>
               </div>
