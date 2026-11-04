@@ -23,8 +23,9 @@ function validateRedirectTo(value: unknown): string | undefined | null {
       const configured = new URL(configuredAppUrl)
       return target.origin === configured.origin ? target.toString() : null
     }
-    const productionOrigin = 'https://evaluedu.elmer-yale99-torrez.chatgpt.site'
+    const productionOrigin = 'https://elmeryale99torrez-prog.github.io'
     if (target.origin === productionOrigin) return target.toString()
+    if (target.origin === 'https://evaluedu.elmer-yale99-torrez.chatgpt.site') return target.toString()
     const isLocalHost = ['localhost', '127.0.0.1'].includes(target.hostname)
     const isPrivateLan = target.hostname.startsWith('192.168.') || target.hostname.startsWith('10.') || target.hostname.startsWith('172.16.') || target.hostname.startsWith('172.17.') || target.hostname.startsWith('172.18.') || target.hostname.startsWith('172.19.') || target.hostname.startsWith('172.2') || target.hostname.startsWith('172.30.') || target.hostname.startsWith('172.31.')
     return (isLocalHost || isPrivateLan) ? target.toString() : null
@@ -75,5 +76,20 @@ Deno.serve(async (request) => {
   const recoveryClient = createClient(supabaseUrl, publishableKey)
   const { error: recoveryError } = await recoveryClient.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
   if (recoveryError) return json({ error: recoveryError.message }, 400)
+
+  // Registrar evento administrativo en el Libro Digital de Auditoría
+  await adminClient.from('audit_events').insert({
+    actor_id: authData.user.id,
+    event_type: 'teacher_access_recovery_sent',
+    entity_type: 'user',
+    entity_id: targetUser.id,
+    metadata: {
+      action: 'password_reset_sent',
+      email,
+      teacherName: targetProfile?.display_name ?? 'Docente',
+      timestamp: new Date().toISOString(),
+    },
+  }).catch(() => {})
+
   return json({ ok: true, email })
 })

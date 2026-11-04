@@ -62,7 +62,7 @@ const studentSessionStorageKey = 'edueval-student-session'
 
 const allowedPanelViews: Record<'teacher' | 'admin', View[]> = {
   teacher: ['overview', 'content', 'proposals', 'rooms', 'results'],
-  admin: ['overview', 'adminUsers', 'rooms', 'adminAudit', 'results'],
+  admin: ['overview', 'adminUsers', 'adminAudit'],
 }
 
 const types: Record<ActivityType, { label: string; icon: React.ReactNode; description: string }> = {
@@ -142,6 +142,24 @@ type CloudRoomActivityRow = { room_id: string; activity_id: string; position: nu
 type CloudParticipantRow = { id: string; room_id: string; display_name: string; joined_at: string; status: string }
 type CloudAttemptRow = { id: string; room_id: string; participant_id: string; started_at: string; finished_at: string; status: string; total_questions: number; answered_count: number; omitted_count: number; correct_count: number; score: number; max_score: number; events: unknown }
 type CloudAttemptAnswerRow = { attempt_id: string; activity_id: string | null; question_index: number; response: unknown; response_text: string | null; status: 'answered' | 'omitted'; correct: boolean | null; score: number; time_seconds: number }
+export interface Institution {
+  id: string
+  name: string
+  code: string
+  planName: string
+  licenseLimit: number
+  activeLicenses: number
+  contactName: string
+  contactEmail: string
+  status: 'active' | 'trial' | 'suspended'
+  validUntil: string
+  createdAt: string
+  stats: {
+    totalEvaluations: number
+    activeTeachersPercent: number
+  }
+}
+
 type AdminUser = { id: string; email: string; displayName: string; role: 'admin' | 'teacher'; roles: ('admin' | 'teacher')[]; status: string; createdAt: string; lastSignInAt: string | null }
 type AdminRoom = { id: string; name: string; code: string; status: RoomStatus; questionCount: number; limit: number; ownerName: string; activities: { id: string; title: string; type: ActivityType; position: number }[]; createdAt: string }
 type AdminAuditEvent = { id: string; eventType: string; actorName: string; roomName: string; createdAt: string; metadata: unknown }
@@ -327,11 +345,19 @@ function hasPasswordRecoveryLink() {
   return search.get('type') === 'recovery' || search.get('reset') === 'password' || hash.get('type') === 'recovery'
 }
 
-const publicAppOrigin = (import.meta.env.VITE_PUBLIC_APP_URL?.trim() || 'https://evaluedu.elmer-yale99-torrez.chatgpt.site').replace(/\/$/, '')
+function getAppOrigin(): string {
+  if (typeof window !== 'undefined' && window.location.origin) {
+    const base = window.location.pathname.startsWith('/EvaluEdu') ? '/EvaluEdu' : ''
+    return `${window.location.origin}${base}`
+  }
+  return (import.meta.env.VITE_PUBLIC_APP_URL?.trim() || 'https://elmeryale99torrez-prog.github.io/EvaluEdu').replace(/\/$/, '')
+}
+
 const FEEDBACK_EMAIL = 'elmeryaletorrez@gmail.com'
 
 function authRedirectUrl(role: Role, flow: 'recovery' | 'invite' = 'recovery') {
-  const url = new URL(`${publicAppOrigin}/`)
+  const origin = getAppOrigin()
+  const url = new URL(origin.endsWith('/') ? origin : `${origin}/`)
   url.searchParams.set('panel', role)
   if (flow === 'invite') url.searchParams.set('type', 'invite')
   return url.toString()
@@ -393,6 +419,16 @@ function App() {
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null)
   const [preselectedRoomActivityIds, setPreselectedRoomActivityIds] = useState<string[] | null>(null)
   const [lastStudentAttempt, setLastStudentAttempt] = useState<StudentAttempt | null>(null)
+  const [adminScope, setAdminScope] = useState<'superadmin' | 'institution'>('institution')
+  const [institutions, setInstitutions] = useState<Institution[]>(() => readStorage('edueval-institutions', initialInstitutions))
+  const [activeInstitutionId, setActiveInstitutionId] = useState<string>('inst-san-simon')
+  const [institutionTeachers, setInstitutionTeachers] = useState<Record<string, AdminUser[]>>(() => ({
+    'inst-san-simon': demoInstitutionTeachers,
+  }))
+
+  useEffect(() => localStorage.setItem('edueval-institutions', JSON.stringify(institutions)), [institutions])
+  const activeInstitution = institutions.find((i) => i.id === activeInstitutionId) || institutions[0] || initialInstitutions[0]
+  const currentTeachers = institutionTeachers[activeInstitution.id] || []
 
   useEffect(() => localStorage.setItem('edueval-activities', JSON.stringify(activities)), [activities])
   useEffect(() => localStorage.setItem('edueval-rooms', JSON.stringify(rooms)), [rooms])
@@ -610,6 +646,86 @@ function App() {
 
   const show = (next: View) => { setView(next); setSelectedActivity(null); setSubmitted(false); setMobileNavOpen(false) }
   const notify = (message: string) => setToast(message)
+
+  const addInstitution = (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => {
+    const newInst: Institution = {
+      id: `inst-${Date.now()}`,
+      name: data.name.trim(),
+      code: data.code.trim().toUpperCase(),
+      planName: data.planName.trim(),
+      licenseLimit: data.licenseLimit,
+      activeLicenses: 0,
+      contactName: data.contactName.trim(),
+      contactEmail: data.contactEmail.trim(),
+      status: 'active',
+      validUntil: data.validUntil,
+      createdAt: new Date().toISOString().slice(0, 10),
+      stats: {
+        totalEvaluations: 0,
+        activeTeachersPercent: 0,
+      },
+    }
+    setInstitutions((prev) => [newInst, ...prev])
+    notify(`Colegio ${newInst.name} registrado con éxito. Paquete de ${newInst.licenseLimit} licencias activado.`)
+  }
+
+  const handleAddTeacher = (teacherData: { displayName: string; email: string; password?: string }) => {
+    const instId = activeInstitution.id
+    const currentList = institutionTeachers[instId] || []
+    const activeCount = currentList.filter((t) => t.status !== 'Bloqueado').length
+
+    if (activeCount >= activeInstitution.licenseLimit) {
+      notify(`Límite alcanzado: el paquete contratado es de ${activeInstitution.licenseLimit} licencias. Para habilitar más docentes, amplía el cupo en el Panel Maestro.`)
+      return
+    }
+
+    const newTeacher: AdminUser = {
+      id: `usr-${Date.now()}`,
+      displayName: teacherData.displayName.trim(),
+      email: teacherData.email.trim().toLowerCase(),
+      role: 'teacher',
+      roles: ['teacher'],
+      status: 'Activo',
+      createdAt: new Date().toISOString(),
+      lastSignInAt: null,
+    }
+
+    setInstitutionTeachers((prev) => ({
+      ...prev,
+      [instId]: [newTeacher, ...(prev[instId] || [])],
+    }))
+
+    setInstitutions((prev) => prev.map((inst) => inst.id === instId ? { ...inst, activeLicenses: activeCount + 1 } : inst))
+    notify(`Profesor(a) ${newTeacher.displayName} dado de alta con licencia activa asignada.`)
+  }
+
+  const handleToggleTeacherStatus = (user: AdminUser, action: 'enable' | 'disable') => {
+    const instId = activeInstitution.id
+    const currentList = institutionTeachers[instId] || []
+    const activeCount = currentList.filter((t) => t.status !== 'Bloqueado').length
+
+    if (action === 'enable' && activeCount >= activeInstitution.licenseLimit) {
+      notify(`No hay cupos disponibles. El colegio tiene ocupadas ${activeCount} de sus ${activeInstitution.licenseLimit} licencias contratadas.`)
+      return
+    }
+
+    const updatedStatus = action === 'enable' ? 'Activo' : 'Bloqueado'
+    const updatedList = currentList.map((t) => t.id === user.id ? { ...t, status: updatedStatus } : t)
+
+    setInstitutionTeachers((prev) => ({
+      ...prev,
+      [instId]: updatedList,
+    }))
+
+    const newActiveCount = updatedList.filter((t) => t.status !== 'Bloqueado').length
+    setInstitutions((prev) => prev.map((inst) => inst.id === instId ? { ...inst, activeLicenses: newActiveCount } : inst))
+
+    if (action === 'disable') {
+      notify(`Acceso pausado para ${user.displayName}. Licencia liberada para suplente o vacante.`)
+    } else {
+      notify(`Licencia reactivada para ${user.displayName}. Acceso restaurado.`)
+    }
+  }
   const queueSync = (kind: SyncKind, payload: unknown, message: string) => {
     setSyncQueue(enqueueSyncItem(kind, payload))
     notify(message)
@@ -1547,8 +1663,8 @@ function App() {
     </header>
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
-      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? 'Administración' : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? 'Sesión administrativa' : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Resumen general" onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Usuarios" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas globales" onClick={() => show('rooms')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Administración'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '⚙'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Administración'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
-      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard activities={activities} rooms={rooms} templates={templates} attempts={displayedAttempts} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView attempts={displayedAttempts} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView attempts={displayedAttempts} rooms={rooms} adminData={adminSnapshot} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'rooms' ? <AdminRoomsView rooms={rooms} activities={activities} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
+      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administrador Maestro SaaS' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Gestión de colegios' : 'Inicio y licencias'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Historial de accesos" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
+      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
     {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
@@ -1840,22 +1956,589 @@ function NavButton({ active, icon, label, badge, onClick }: { active: boolean; i
   )
 }
 
-const demoAdminUsers = [
-  { name: 'Lucía Martínez', email: 'lucia@evaluedu.demo', role: 'Docente', status: 'Activo', lastAccess: 'Hoy, 08:42' },
-  { name: 'Marco Quispe', email: 'marco@evaluedu.demo', role: 'Docente', status: 'Activo', lastAccess: 'Ayer, 16:20' },
-  { name: 'Ana Rivera', email: 'ana@evaluedu.demo', role: 'Administrador', status: 'Activo', lastAccess: 'Hoy, 09:10' },
+export const initialInstitutions: Institution[] = [
+  {
+    id: 'inst-san-simon',
+    name: 'Unidad Educativa San Simón',
+    code: 'COL-SAN-SIMON',
+    planName: 'Licencia Institucional Anual (Secundaria)',
+    licenseLimit: 20,
+    activeLicenses: 14,
+    contactName: 'Lic. Roberto Valdez (Director)',
+    contactEmail: 'direccion@sansimon.edu.bo',
+    status: 'active',
+    validUntil: '2027-12-15',
+    createdAt: '2026-02-01',
+    stats: {
+      totalEvaluations: 184,
+      activeTeachersPercent: 85,
+    },
+  },
+  {
+    id: 'inst-san-agustin',
+    name: 'Colegio San Agustín',
+    code: 'COL-SAN-AGUSTIN',
+    planName: 'Plan Institucional Pro',
+    licenseLimit: 30,
+    activeLicenses: 26,
+    contactName: 'Dra. María Elena Ramos (Rectora)',
+    contactEmail: 'rectoria@sanagustin.edu.bo',
+    status: 'active',
+    validUntil: '2027-11-30',
+    createdAt: '2026-03-10',
+    stats: {
+      totalEvaluations: 312,
+      activeTeachersPercent: 92,
+    },
+  },
+  {
+    id: 'inst-los-andes',
+    name: 'Instituto Técnico Los Andes',
+    code: 'INST-LOS-ANDES',
+    planName: 'Plan Básico Institucional',
+    licenseLimit: 15,
+    activeLicenses: 9,
+    contactName: 'Prof. Carlos Villarroel (Director)',
+    contactEmail: 'direccion@losandes.edu.bo',
+    status: 'trial',
+    validUntil: '2026-12-31',
+    createdAt: '2026-09-15',
+    stats: {
+      totalEvaluations: 45,
+      activeTeachersPercent: 60,
+    },
+  },
 ]
 
-function AdminDashboard({ activities, rooms, templates, attempts, adminData, onNavigate }: { activities: Activity[]; rooms: Room[]; templates: EvaluationTemplate[]; attempts: StudentAttempt[]; adminData: AdminSnapshot | null; onNavigate: (view: View) => void }) {
-  const activeRooms = adminData ? adminData.rooms.filter((room) => ['waiting', 'active'].includes(room.status)).length : rooms.filter((room) => ['waiting', 'active'].includes(room.status)).length
-  const published = adminData?.metrics.publishedActivities ?? activities.filter((activity) => activity.status === 'published').length
-  const completion = attempts.length ? Math.round((attempts.filter((attempt) => attempt.status === 'completed').length / attempts.length) * 100) : 0
-  const users = adminData?.users ?? []
-  const sourceRooms = adminData?.rooms ?? rooms
-  return <><PageIntro eyebrow="CONTROL DE LA PLATAFORMA" title="Resumen general" description="Supervisa usuarios, contenidos y evaluaciones desde la administración de EvaluEdu." action={<span className="tag published">{adminData ? 'Supabase conectado' : 'Cargando datos globales'}</span>} /><div className="admin-notice"><span>✓</span><div><b>{adminData ? 'Datos administrativos sincronizados.' : 'Cargando datos administrativos.'}</b><p>{adminData ? 'Usuarios, salas, auditoría e intentos se consultan desde Supabase con permisos de administrador.' : 'Mientras se consulta Supabase, se conserva la copia local como respaldo temporal.'}</p></div></div><div className="metric-grid admin-metrics"><Metric icon="♙" value={adminData?.metrics.users ?? users.length} label="Usuarios registrados" trend="Docentes y administración" tone="mint" /><Metric icon="⌘" value={activeRooms} label="Salas abiertas" trend={`${adminData?.metrics.rooms ?? sourceRooms.length} salas en total`} tone="lavender" /><Metric icon="◈" value={published} label="Actividades publicadas" trend={`${adminData?.metrics.templates ?? templates.length} plantillas guardadas`} tone="peach" /><Metric icon="✓" value={`${completion}%`} label="Intentos finalizados" trend={`${adminData?.metrics.attempts ?? attempts.length} registros`} tone="mint" /></div><div className="dashboard-grid admin-grid"><section className="panel"><div className="panel-heading"><div><h2>Usuarios y permisos</h2><p>{adminData ? 'Directorio real de Supabase.' : 'Directorio temporal de esta sesión.'}</p></div><button className="text-button" onClick={() => onNavigate('adminUsers')}>Ver usuarios →</button></div>{adminData ? users.slice(0, 4).map((user) => <div className="admin-user-row" key={user.id}><span className="admin-avatar">{user.displayName.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span><div><b>{user.displayName}</b><small>{user.email}</small></div><span className="admin-role">{user.roles.map((item) => item === 'admin' ? 'Administrador' : 'Docente').join(' · ')}</span><span className="admin-status">{user.status}</span></div>) : demoAdminUsers.map((user) => <div className="admin-user-row" key={user.email}><span className="admin-avatar">{user.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</span><div><b>{user.name}</b><small>{user.email}</small></div><span className="admin-role">{user.role}</span><span className="admin-status">{user.status}</span></div>)}</section><section className="panel admin-health"><div className="panel-heading"><div><h2>Estado del sistema</h2><p>Indicadores de la instalación actual.</p></div></div><div className="health-line"><span className="health-dot local" /><div><b>Persistencia local</b><small>Respaldo temporal del navegador.</small></div><strong>Activa</strong></div><div className="health-line"><span className="health-dot ready" /><div><b>Supabase Auth</b><small>Sesiones y roles verificados.</small></div><strong>Activa</strong></div><div className="health-line"><span className="health-dot ready" /><div><b>RLS y Realtime</b><small>Permisos y estados de sala conectados.</small></div><strong>Activos</strong></div></section></div><section className="panel admin-quick-actions"><div><p className="eyebrow">ACCIONES DE CONTROL</p><h2>Revisión rápida</h2><p>Consulta las áreas sincronizadas con el backend.</p></div><div className="admin-action-grid"><button className="outline-button" onClick={() => onNavigate('rooms')}>⌘ Revisar salas</button><button className="outline-button" onClick={() => onNavigate('adminAudit')}>◌ Ver auditoría</button><button className="outline-button" onClick={() => onNavigate('results')}>↗ Revisar resultados</button></div></section></>
+export const demoInstitutionTeachers: AdminUser[] = [
+  { id: 'usr-1', displayName: 'Prof. Lucía Martínez', email: 'lucia.martinez@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-02-15T08:00:00Z', lastSignInAt: '2026-11-03T08:42:00Z' },
+  { id: 'usr-2', displayName: 'Prof. Marco Quispe', email: 'marco.quispe@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-03-01T08:00:00Z', lastSignInAt: '2026-11-02T16:20:00Z' },
+  { id: 'usr-3', displayName: 'Prof. Carmen Morales', email: 'carmen.morales@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-04-10T08:00:00Z', lastSignInAt: '2026-11-01T10:15:00Z' },
+  { id: 'usr-4', displayName: 'Prof. Javier Benítez', email: 'javier.benitez@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-05-12T08:00:00Z', lastSignInAt: '2026-11-02T11:30:00Z' },
+  { id: 'usr-5', displayName: 'Prof. Paola Arce', email: 'paola.arce@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Bloqueado', createdAt: '2026-02-20T08:00:00Z', lastSignInAt: '2026-09-15T09:00:00Z' },
+  { id: 'usr-6', displayName: 'Prof. Fernando Rojas', email: 'fernando.rojas@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-06-01T08:00:00Z', lastSignInAt: '2026-10-30T14:10:00Z' },
+  { id: 'usr-7', displayName: 'Prof. Mariana Siles', email: 'mariana.siles@sansimon.edu.bo', role: 'teacher', roles: ['teacher'], status: 'Activo', createdAt: '2026-06-15T08:00:00Z', lastSignInAt: '2026-10-28T09:40:00Z' },
+]
+
+function AdminScopeBanner({
+  adminScope,
+  setAdminScope,
+  institution,
+  onGoToInstitutionDemo,
+}: {
+  adminScope: 'superadmin' | 'institution'
+  setAdminScope: (scope: 'superadmin' | 'institution') => void
+  institution: Institution
+  onGoToInstitutionDemo: () => void
+}) {
+  if (adminScope === 'institution') {
+    return (
+      <div className="admin-scope-banner institution-mode">
+        <div className="scope-info">
+          <span className="scope-tag">MODO DEMO INSTITUCIONAL (COLEGIO CLIENTE)</span>
+          <h3>🏫 {institution.name}</h3>
+          <small>Así es exactamente como el Director de este colegio gestiona sus licencias y profesores · {institution.planName}</small>
+        </div>
+        <button
+          type="button"
+          className="scope-switch-btn superadmin-action"
+          onClick={() => setAdminScope('superadmin')}
+          title="Regresar a tu panel maestro de negocio para gestionar todos los colegios"
+        >
+          👑 Ver Panel Maestro Superadmin (Elmer) →
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="admin-scope-banner superadmin-mode">
+      <div className="scope-info">
+        <span className="scope-tag">PANEL MAESTRO DE SUPERADMINISTRADOR</span>
+        <h3>👑 EvaluEdu SaaS · Gestión de Colegios Clientes</h3>
+        <small>Vista de negocio de Elmer Yaletorrez · Monitoreo de instituciones contratadas y licencias activas</small>
+      </div>
+      <button
+        type="button"
+        className="scope-switch-btn demo-action"
+        onClick={onGoToInstitutionDemo}
+        title="Abrir la vista del colegio ficticio de ejemplo para presentaciones de venta"
+      >
+        🏫 Abrir Colegio Demo ({institution.name}) para Venta →
+      </button>
+    </div>
+  )
 }
 
-function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { attempts: StudentAttempt[]; profile: Profile | null; adminData: AdminSnapshot | null; onRefresh: () => void; onHome: () => void }) {
+function RegisterInstitutionModal({
+  onClose,
+  onSave,
+}: {
+  onClose: () => void
+  onSave: (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => void
+}) {
+  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const [planName, setPlanName] = useState('Licencia Institucional Anual')
+  const [licenseLimit, setLicenseLimit] = useState(25)
+  const [contactName, setContactName] = useState('')
+  const [contactEmail, setContactEmail] = useState('')
+  const [validUntil, setValidUntil] = useState('2027-12-31')
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    onSave({
+      name: name.trim(),
+      code: code.trim().toUpperCase() || `COL-${Date.now().toString().slice(-4)}`,
+      planName: planName.trim(),
+      licenseLimit: Math.max(1, Number(licenseLimit) || 1),
+      contactName: contactName.trim(),
+      contactEmail: contactEmail.trim().toLowerCase(),
+      validUntil,
+    })
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-card institution-register-modal">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">NUEVO CLIENTE SAAS</p>
+            <h2>Registrar Nueva Institución Educativa</h2>
+            <p className="modal-subtitle">Asigna un paquete de licencias y habilita el acceso para el director del colegio.</p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose}>×</button>
+        </div>
+
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <label>
+            Nombre oficial de la institución / colegio
+            <input
+              type="text"
+              placeholder="Ej. Unidad Educativa San Simón"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              minLength={3}
+            />
+          </label>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <label>
+              Código o sigla
+              <input
+                type="text"
+                placeholder="Ej. COL-SAN-SIMON"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </label>
+            <label>
+              Cupo de licencias docentes
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={licenseLimit}
+                onChange={(e) => setLicenseLimit(Number(e.target.value))}
+                required
+              />
+            </label>
+          </div>
+
+          <label>
+            Plan institucional contratado
+            <input
+              type="text"
+              placeholder="Ej. Licencia Institucional Anual (Secundaria)"
+              value={planName}
+              onChange={(e) => setPlanName(e.target.value)}
+              required
+            />
+          </label>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <label>
+              Nombre del Director / Rector
+              <input
+                type="text"
+                placeholder="Ej. Lic. Roberto Valdez"
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Correo institucional del Director
+              <input
+                type="email"
+                placeholder="director@colegio.edu.bo"
+                value={contactEmail}
+                onChange={(e) => setContactEmail(e.target.value)}
+                required
+              />
+            </label>
+          </div>
+
+          <label>
+            Vigencia del contrato
+            <input
+              type="date"
+              value={validUntil}
+              onChange={(e) => setValidUntil(e.target.value)}
+              required
+            />
+          </label>
+
+          <div className="auth-message success">
+            Al registrar la institución, se habilitará el paquete de {licenseLimit} licencias docentes bajo su administración.
+          </div>
+
+          <div className="modal-actions">
+            <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="primary-button">Registrar Institución →</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function AdminDashboard({
+  adminScope,
+  setAdminScope,
+  institutions,
+  onAddInstitution,
+  activeInstitution,
+  onSelectInstitution,
+  teachers,
+  adminData,
+  onNavigate,
+}: {
+  adminScope: 'superadmin' | 'institution'
+  setAdminScope: (scope: 'superadmin' | 'institution') => void
+  institutions: Institution[]
+  onAddInstitution: (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => void
+  activeInstitution: Institution
+  onSelectInstitution: (id: string) => void
+  teachers: AdminUser[]
+  adminData: AdminSnapshot | null
+  onNavigate: (view: View) => void
+}) {
+  const [showRegisterModal, setShowRegisterModal] = useState(false)
+
+  // Cálculos para vista Superadmin
+  const totalLicensesSold = institutions.reduce((acc, i) => acc + i.licenseLimit, 0)
+  const totalActiveLicenses = institutions.reduce((acc, i) => acc + i.activeLicenses, 0)
+
+  // Cálculos para vista Institucional (Colegio Demo)
+  const activeTeachersCount = teachers.filter((t) => t.status !== 'Bloqueado').length
+  const availableLicenses = Math.max(0, activeInstitution.licenseLimit - activeTeachersCount)
+  const quotaPercent = Math.min(100, Math.round((activeTeachersCount / activeInstitution.licenseLimit) * 100))
+
+  return (
+    <>
+      <AdminScopeBanner
+        adminScope={adminScope}
+        setAdminScope={setAdminScope}
+        institution={activeInstitution}
+        onGoToInstitutionDemo={() => {
+          onSelectInstitution(institutions[0]?.id || 'inst-san-simon')
+          setAdminScope('institution')
+        }}
+      />
+
+      {adminScope === 'superadmin' ? (
+        <>
+          <PageIntro
+            eyebrow="EVALUEDU SAAS · PANEL MAESTRO"
+            title="Gestión Global de Instituciones y Clientes"
+            description="Administra los colegios suscritos a EvaluEdu, supervisa paquetes de licencias vendidas y da de alta nuevas instituciones educativas."
+            action={
+              <button className="primary-button" onClick={() => setShowRegisterModal(true)}>
+                ＋ Registrar nuevo colegio
+              </button>
+            }
+          />
+
+          <div className="metric-grid admin-metrics">
+            <Metric
+              icon="🏫"
+              value={institutions.length}
+              label="Colegios clientes"
+              trend="Instituciones educativas afiliadas"
+              tone="mint"
+            />
+            <Metric
+              icon="📜"
+              value={totalLicensesSold}
+              label="Licencias vendidas"
+              trend={`${totalActiveLicenses} docentes activos en total`}
+              tone="lavender"
+            />
+            <Metric
+              icon="👨‍🏫"
+              value={totalActiveLicenses}
+              label="Docentes en servicio"
+              trend="Utilizando EvaluEdu activamente"
+              tone="peach"
+            />
+            <Metric
+              icon="✓"
+              value="100%"
+              label="Disponibilidad SaaS"
+              trend="Servidores y Supabase operativos"
+              tone="mint"
+            />
+          </div>
+
+          <section className="panel" style={{ marginTop: '16px' }}>
+            <div className="panel-heading">
+              <div>
+                <h2>Padrón de Instituciones Clientes ({institutions.length})</h2>
+                <p>Haz clic en cualquier colegio para ver su panel institucional y probar la experiencia de demo comercial.</p>
+              </div>
+              <span className="tag published">Plataforma SaaS</span>
+            </div>
+
+            <div className="table-scroll-hint-bar">
+              <span className="table-scroll-hint">↔ Desliza la tabla horizontalmente para ver todos los datos</span>
+            </div>
+
+            <div className="results-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Colegio / Institución</th>
+                    <th>Plan contratado</th>
+                    <th>Cupo de licencias</th>
+                    <th>Director / Contacto</th>
+                    <th>Vigencia</th>
+                    <th>Estado</th>
+                    <th>Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {institutions.map((inst) => {
+                    const isDemo = inst.id === 'inst-san-simon'
+                    return (
+                      <tr key={inst.id}>
+                        <td>
+                          <b>{inst.name}</b>
+                          <small style={{ display: 'block', color: '#688275' }}>Código: {inst.code}</small>
+                        </td>
+                        <td>{inst.planName}</td>
+                        <td>
+                          <strong>{inst.activeLicenses} de {inst.licenseLimit}</strong>
+                          <small style={{ display: 'block', color: '#688275' }}>
+                            {Math.max(0, inst.licenseLimit - inst.activeLicenses)} libres
+                          </small>
+                        </td>
+                        <td>
+                          <b>{inst.contactName}</b>
+                          <small style={{ display: 'block', color: '#688275' }}>{inst.contactEmail}</small>
+                        </td>
+                        <td>{inst.validUntil}</td>
+                        <td>
+                          <span className={`result-status ${inst.status === 'active' ? '' : 'waiting'}`}>
+                            {inst.status === 'active' ? 'Activo' : 'Prueba'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="primary-button"
+                            style={{ fontSize: '11px', padding: '6px 10px', whiteSpace: 'nowrap' }}
+                            onClick={() => {
+                              onSelectInstitution(inst.id)
+                              setAdminScope('institution')
+                            }}
+                          >
+                            👁️ {isDemo ? 'Abrir Demo Venta →' : 'Ver colegio →'}
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {showRegisterModal && (
+            <RegisterInstitutionModal
+              onClose={() => setShowRegisterModal(false)}
+              onSave={(data) => {
+                onAddInstitution(data)
+                setShowRegisterModal(false)
+              }}
+            />
+          )}
+        </>
+      ) : (
+        <>
+          <PageIntro
+            eyebrow={`GESTIÓN INSTITUCIONAL · ${activeInstitution.name.toUpperCase()}`}
+            title="Tablero de Licencias y Claustro Docente"
+            description="Supervisa las licencias docentes contratadas, el claustro de profesores y la adopción escolar."
+            action={<span className="tag published">{activeInstitution.planName} · Activo</span>}
+          />
+
+          <div className="license-hero-card">
+            <div className="license-hero-header">
+              <div>
+                <h2>{activeInstitution.name}</h2>
+                <p>Dirección Académica · {activeInstitution.contactName} ({activeInstitution.contactEmail})</p>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className={`license-badge ${availableLicenses === 0 ? 'warning' : ''}`}>
+                  {availableLicenses > 0
+                    ? `✓ ${availableLicenses} licencias disponibles`
+                    : '⚠️ Cupo completo'}
+                </span>
+                <span className="license-badge">
+                  📅 Vigencia: {activeInstitution.validUntil}
+                </span>
+              </div>
+            </div>
+
+            <div className="license-meter-wrap">
+              <div className="license-meter-labels">
+                <b>Consumo de licencias docentes contratadas:</b>
+                <span>{activeTeachersCount} de {activeInstitution.licenseLimit} en uso ({quotaPercent}%)</span>
+              </div>
+              <div className="license-track">
+                <div
+                  className={`license-fill ${quotaPercent >= 100 ? 'full' : ''}`}
+                  style={{ width: `${quotaPercent}%` }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e5ede7', paddingTop: '12px' }}>
+              <small style={{ color: '#557766' }}>
+                Cada profesor en servicio consume 1 licencia. Puedes pausar cuentas por licencia médica para transferir el cupo a un suplente.
+              </small>
+              <button
+                type="button"
+                className="primary-button"
+                style={{ fontSize: '12px', padding: '7px 12px' }}
+                onClick={() => onNavigate('adminUsers')}
+              >
+                ＋ Asignar licencia a profesor
+              </button>
+            </div>
+          </div>
+
+          <div className="metric-grid admin-metrics">
+            <Metric
+              icon="📜"
+              value={activeInstitution.licenseLimit}
+              label="Plazas contratadas"
+              trend={`${availableLicenses} cupos libres para el colegio`}
+              tone="mint"
+            />
+            <Metric
+              icon="👨‍🏫"
+              value={activeTeachersCount}
+              label="Profesores en servicio"
+              trend="Cuerpo docente activo del colegio"
+              tone="lavender"
+            />
+            <Metric
+              icon="📈"
+              value={`${activeInstitution.stats.activeTeachersPercent}%`}
+              label="Tasa de adopción escolar"
+              trend="Docentes evaluando activamente"
+              tone="peach"
+            />
+            <Metric
+              icon="📝"
+              value={activeInstitution.stats.totalEvaluations}
+              label="Evaluaciones en el ciclo"
+              trend="Actividad pedagógica institucional"
+              tone="mint"
+            />
+          </div>
+
+          <section className="panel" style={{ marginTop: '16px' }}>
+            <div className="panel-heading">
+              <div>
+                <h2>Garantías del Software Institucional</h2>
+                <p>Propiedad del colegio, autonomía pedagógica y custodia normativa.</p>
+              </div>
+            </div>
+            <div className="health-line">
+              <span className="health-dot ready" />
+              <div>
+                <b>Patrimonio Pedagógico del Colegio</b>
+                <small>Las plantillas y actividades pedagógicas pertenecen a la institución y no se pierden si un profesor renuncia.</small>
+              </div>
+              <strong>Garantizado</strong>
+            </div>
+            <div className="health-line">
+              <span className="health-dot ready" />
+              <div>
+                <b>Autonomía y Privacidad Docente</b>
+                <small>Los profesores califican con plena autonomía. La dirección supervisa el uso institucional sin espiar notas de alumnos.</small>
+              </div>
+              <strong>Respetado</strong>
+            </div>
+            <div className="health-line">
+              <span className="health-dot ready" />
+              <div>
+                <b>Custodia Normativa Segura</b>
+                <small>Cumplimiento estricto de resguardo de datos escolares de menores en servidores seguros certificados.</small>
+              </div>
+              <strong>Certificado</strong>
+            </div>
+          </section>
+
+          <section className="panel admin-quick-actions" style={{ marginTop: '16px' }}>
+            <div>
+              <p className="eyebrow">ACCIONES INSTITUCIONALES</p>
+              <h2>Gestión del Colegio</h2>
+              <p>Administra las plazas docentes o consulta el registro administrativo de accesos.</p>
+            </div>
+            <div className="admin-action-grid">
+              <button className="outline-button" onClick={() => onNavigate('adminUsers')}>
+                👥 Directorio Docente y Cupos
+              </button>
+              <button className="outline-button" onClick={() => onNavigate('adminAudit')}>
+                📋 Historial de Accesos Institucionales
+              </button>
+            </div>
+          </section>
+        </>
+      )}
+    </>
+  )
+}
+
+function AdminUsersView({
+  adminScope,
+  setAdminScope,
+  institution,
+  teachers,
+  profile,
+  adminData,
+  onRefresh,
+  onAddTeacher,
+  onToggleTeacherStatus,
+  onHome,
+}: {
+  adminScope: 'superadmin' | 'institution'
+  setAdminScope: (scope: 'superadmin' | 'institution') => void
+  institution: Institution
+  teachers: AdminUser[]
+  profile: Profile | null
+  adminData: AdminSnapshot | null
+  onRefresh: () => void
+  onAddTeacher: (teacher: { displayName: string; email: string; password?: string }) => void
+  onToggleTeacherStatus: (user: AdminUser, action: 'enable' | 'disable') => void
+  onHome: () => void
+}) {
+  const [userSource, setUserSource] = useState<'platform' | 'institution'>(() => adminScope === 'superadmin' ? 'platform' : 'institution')
   const [showInvite, setShowInvite] = useState(false)
   const [accessMode, setAccessMode] = useState<'pilot' | 'invite'>('pilot')
   const [email, setEmail] = useState('')
@@ -1866,7 +2549,21 @@ function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { a
   const [saving, setSaving] = useState(false)
   const [removingId, setRemovingId] = useState<string | null>(null)
   const [resendingId, setResendingId] = useState<string | null>(null)
+  const [searchFilter, setSearchFilter] = useState('')
+  const [statusTab, setStatusTab] = useState<'all' | 'active' | 'pending' | 'disabled'>('all')
+
+  const realUsers = adminData?.users ?? []
   const canManageUsers = !isSupabaseConfigured || canAccessPanel(profile, 'admin')
+
+  useEffect(() => {
+    setUserSource(adminScope === 'superadmin' ? 'platform' : 'institution')
+  }, [adminScope])
+
+  // Cálculos para vista Institucional (Colegio Demo)
+  const activeCount = teachers.filter((t) => t.status !== 'Bloqueado').length
+  const availableLicenses = Math.max(0, institution.licenseLimit - activeCount)
+  const canAddMore = availableLicenses > 0
+
   const closeInviteModal = () => {
     setShowInvite(false)
     setAccessMode('pilot')
@@ -1876,41 +2573,11 @@ function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { a
     setPilotConfirmation('')
   }
 
-  const inviteTeacher = async (event: FormEvent) => {
-    event.preventDefault()
-    if (!canManageUsers) {
-      setStatus({ kind: 'error', message: 'Tu perfil no tiene permisos de administrador para invitar usuarios.' })
-      return
-    }
-    if (!supabase) {
-      setStatus({ kind: 'error', message: 'Supabase no está configurado en este entorno.' })
-      return
-    }
-    setSaving(true)
-    setStatus(null)
-    const { data: refreshedSession, error: refreshError } = await supabase.auth.refreshSession()
-    if (refreshError || !refreshedSession.session) {
-      setSaving(false)
-      setStatus({ kind: 'error', message: 'Tu sesión expiró. Cierra sesión y vuelve a ingresar para continuar.' })
-      return
-    }
-    const { data, error } = await supabase.functions.invoke('admin-invite-teacher', {
-      body: { email: email.trim(), displayName: displayName.trim(), redirectTo: authRedirectUrl('teacher', 'invite') },
-    })
-    setSaving(false)
-    if (error || !data?.ok) {
-      setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo enviar la invitación.') })
-      return
-    }
-    closeInviteModal()
-    onRefresh()
-    setStatus({ kind: 'success', message: `Invitación enviada a ${data.email}. El docente deberá completar su acceso desde el enlace recibido.` })
-  }
-
+  // --- Operaciones Reales en Supabase (Docentes de la Plataforma) ---
   const createPilotTeacher = async (event: FormEvent) => {
     event.preventDefault()
     if (!canManageUsers) {
-      setStatus({ kind: 'error', message: 'Tu perfil no tiene permisos de administrador para crear accesos piloto.' })
+      setStatus({ kind: 'error', message: 'Tu perfil no tiene permisos de administrador para crear accesos.' })
       return
     }
     if (pilotPassword.length < 8) {
@@ -1922,7 +2589,9 @@ function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { a
       return
     }
     if (!supabase) {
-      setStatus({ kind: 'error', message: 'Supabase no está configurado en este entorno.' })
+      onAddTeacher({ displayName: displayName.trim(), email: email.trim().toLowerCase(), password: pilotPassword })
+      closeInviteModal()
+      setStatus({ kind: 'success', message: `Docente ${displayName} registrado localmente.` })
       return
     }
     setSaving(true)
@@ -1934,33 +2603,81 @@ function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { a
       return
     }
     const { data, error } = await supabase.functions.invoke('admin-create-pilot-teacher', {
-      body: { email: email.trim(), displayName: displayName.trim(), password: pilotPassword },
+      body: { email: email.trim().toLowerCase(), displayName: displayName.trim(), password: pilotPassword },
     })
     setSaving(false)
     if (error || !data?.ok) {
-      setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo crear el acceso piloto.') })
+      setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo crear el acceso.') })
       return
     }
     closeInviteModal()
     onRefresh()
-    setStatus({ kind: 'success', message: `${data.mode === 'activated' ? 'Acceso reactivado' : 'Acceso creado'} para ${data.email}. El docente puede ingresar con esa contraseña y cambiarla desde su perfil.` })
+    setStatus({ kind: 'success', message: `${data.mode === 'activated' ? 'Acceso reactivado' : 'Acceso creado'} para ${data.email}. El docente ya puede ingresar con esa contraseña.` })
   }
 
-  const removeUser = async (user: AdminUser) => {
-    if (!supabase || !canManageUsers || user.roles.includes('admin')) return
-    if (!window.confirm(`¿Desactivar a ${user.displayName}? Se bloqueará su acceso, pero sus datos y resultados se conservarán.`)) return
+  const inviteTeacher = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!canManageUsers) {
+      setStatus({ kind: 'error', message: 'Tu perfil no tiene permisos de administrador para invitar usuarios.' })
+      return
+    }
+    if (!supabase) {
+      onAddTeacher({ displayName: displayName.trim(), email: email.trim().toLowerCase() })
+      closeInviteModal()
+      setStatus({ kind: 'success', message: `Invitación registrada para ${email}.` })
+      return
+    }
+    setSaving(true)
+    setStatus(null)
+    const { data: refreshedSession, error: refreshError } = await supabase.auth.refreshSession()
+    if (refreshError || !refreshedSession.session) {
+      setSaving(false)
+      setStatus({ kind: 'error', message: 'Tu sesión expiró. Cierra sesión y vuelve a ingresar para continuar.' })
+      return
+    }
+    const { data, error } = await supabase.functions.invoke('admin-invite-teacher', {
+      body: { email: email.trim().toLowerCase(), displayName: displayName.trim(), redirectTo: authRedirectUrl('teacher', 'invite') },
+    })
+    setSaving(false)
+    if (error || !data?.ok) {
+      setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo enviar la invitación.') })
+      return
+    }
+    closeInviteModal()
+    onRefresh()
+    setStatus({ kind: 'success', message: `Invitación enviada a ${data.email}. El docente completará su acceso desde el enlace recibido.` })
+  }
+
+  const handleToggleRealUser = async (user: AdminUser, action: 'enable' | 'disable') => {
+    if (!canManageUsers || user.roles.includes('admin')) return
+    const isDisable = action === 'disable'
+    const confirmMsg = isDisable
+      ? `¿Desactivar la cuenta de ${user.displayName}? Se pausará su acceso a la plataforma.`
+      : `¿Reactivar el acceso para ${user.displayName}?`
+    if (!window.confirm(confirmMsg)) return
+    if (!supabase) {
+      onToggleTeacherStatus(user, action)
+      return
+    }
     setRemovingId(user.id)
     setStatus(null)
-    const { data, error } = await supabase.functions.invoke('admin-remove-user', { body: { userId: user.id } })
+    const { data, error } = await supabase.functions.invoke('admin-remove-user', { body: { userId: user.id, action } })
     setRemovingId(null)
-    if (error || !data?.ok) { setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo desactivar al usuario.') }); return }
-    setStatus({ kind: 'success', message: `${user.displayName} fue desactivado. Sus datos y resultados se conservaron.` })
+    if (error || !data?.ok) {
+      setStatus({ kind: 'error', message: await functionErrorMessage(error, data, isDisable ? 'No se pudo desactivar al usuario.' : 'No se pudo reactivar al usuario.') })
+      return
+    }
+    setStatus({ kind: 'success', message: `${user.displayName} fue ${isDisable ? 'desactivado' : 'reactivado'} correctamente.` })
     onRefresh()
   }
 
-  const resendAccess = async (user: AdminUser) => {
-    if (!supabase || !canManageUsers || user.roles.includes('admin') || user.status === 'Bloqueado') return
+  const handleResendAccess = async (user: AdminUser) => {
+    if (!canManageUsers || user.roles.includes('admin') || user.status === 'Bloqueado') return
     if (!window.confirm(`¿Enviar un enlace para que ${user.displayName} cree o restablezca su contraseña?`)) return
+    if (!supabase) {
+      setStatus({ kind: 'success', message: `Simulación: enlace de recuperación enviado a ${user.email}.` })
+      return
+    }
     setResendingId(user.id)
     setStatus(null)
     const { data, error } = await supabase.functions.invoke('admin-resend-access', {
@@ -1971,23 +2688,613 @@ function AdminUsersView({ attempts, profile, adminData, onRefresh, onHome }: { a
       setStatus({ kind: 'error', message: await functionErrorMessage(error, data, 'No se pudo enviar el enlace de recuperación.') })
       return
     }
-    setStatus({ kind: 'success', message: `Se envió un enlace de recuperación a ${user.email}.` })
+    setStatus({ kind: 'success', message: `Se envió un enlace para restablecer contraseña a ${user.email}.` })
   }
 
-  const users = adminData?.users ?? []
-  return <>
-    <PageIntro eyebrow="ADMINISTRACIÓN" title="Usuarios y permisos" description="Invita docentes autorizados y conserva la separación entre administración y enseñanza." action={canManageUsers ? <button className="primary-button" onClick={() => { setStatus(null); setAccessMode('pilot'); setShowInvite(true) }}>＋ Agregar usuario</button> : <span className="demo-admin-tag">Acceso de solo lectura</span>} />
-    <div className="admin-notice"><span>✓</span><div><b>Alta y gestión de docentes.</b><p>Asigna una contraseña directa o envía una invitación por correo institucional.</p></div></div>
-    {status && <div className={`auth-message ${status.kind}`}>{status.message}</div>}
-    <section className="panel"><div className="panel-heading"><div><h2>Directorio de la plataforma</h2><p>{adminData ? `${users.length} usuarios registrados · ${attempts.length} intentos sincronizados` : 'Cargando usuarios desde Supabase…'}</p></div><span className="tag published">{adminData ? 'Supabase' : 'Respaldo local'}</span></div><div className="table-scroll-hint-bar"><span className="table-scroll-hint">↔ Desliza la tabla horizontalmente para ver todos los datos</span></div><div className="results-table-wrap"><table><thead><tr><th>Persona</th><th>Rol</th><th>Estado</th><th>Último acceso</th><th>Acceso previsto</th><th>Acción</th></tr></thead><tbody>{users.length ? users.map((user) => <tr key={user.id}><td><b>{user.displayName}</b><small>{user.email}</small></td><td>{user.roles.map((item) => item === 'admin' ? 'Administrador' : 'Docente').join(' · ')}</td><td><span className="result-status">{user.status}</span></td><td>{user.lastSignInAt ? formatDate(user.lastSignInAt) : 'Aún no'}</td><td>{user.roles.includes('admin') ? 'Global' : 'Su institución'}</td><td>{user.roles.includes('admin') ? <span className="muted">Protegido</span> : user.status === 'Bloqueado' ? <span className="muted">Desactivado</span> : <div className="table-actions"><button className="text-button" disabled={resendingId === user.id} onClick={() => void resendAccess(user)}>{resendingId === user.id ? 'Enviando…' : user.status === 'Pendiente' ? 'Reenviar acceso' : 'Restablecer acceso'}</button><button className="text-button danger-text-button" disabled={removingId === user.id} onClick={() => void removeUser(user)}>{removingId === user.id ? 'Desactivando…' : 'Desactivar usuario'}</button></div>}</td></tr>) : <tr><td colSpan={6}>Aún no hay perfiles administrativos para mostrar.</td></tr>}</tbody></table></div></section>
-    <section className="panel admin-permission-grid"><div><p className="eyebrow">MODELO DE PERMISOS</p><h2>Separación de responsabilidades</h2></div><div className="permission-card"><b>Administrador</b><span>Usuarios, instituciones, auditoría y configuración global.</span></div><div className="permission-card"><b>Docente</b><span>Sus plantillas, salas, actividades y resultados privados.</span></div><div className="permission-card"><b>Estudiante</b><span>Solo las salas autorizadas y su participación actual.</span></div></section>
-    {showInvite && <div className="modal-backdrop"><div className="modal-card admin-invite-modal"><div className="modal-head"><div><p className="eyebrow">NUEVO ACCESO</p><h2>{accessMode === 'pilot' ? 'Asignar contraseña directa' : 'Invitar docente'}</h2><p className="modal-subtitle">{accessMode === 'pilot' ? 'El docente ingresará de inmediato con la contraseña definida por administración.' : 'El docente recibirá un enlace en su correo institucional.'}</p></div><button type="button" className="icon-button" onClick={closeInviteModal}>×</button></div><div className="access-mode-toggle" role="tablist" aria-label="Tipo de acceso"><button type="button" className={accessMode === 'pilot' ? 'primary-button' : 'outline-button'} onClick={() => { setStatus(null); setAccessMode('pilot') }}>Contraseña directa</button><button type="button" className={accessMode === 'invite' ? 'primary-button' : 'outline-button'} onClick={() => { setStatus(null); setAccessMode('invite') }}>Invitar por correo</button></div><form className="auth-form" onSubmit={accessMode === 'pilot' ? createPilotTeacher : inviteTeacher}><label>Nombre visible<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Ej. Lucía Martínez" minLength={2} required /></label><label>Correo del docente<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="docente@institucion.edu" required /></label>{accessMode === 'pilot' ? <><label>Contraseña temporal<input type="password" value={pilotPassword} onChange={(event) => setPilotPassword(event.target.value)} placeholder="Mínimo 8 caracteres" minLength={8} autoComplete="new-password" required /></label><label>Repetir contraseña<input type="password" value={pilotConfirmation} onChange={(event) => setPilotConfirmation(event.target.value)} placeholder="Repite la contraseña" minLength={8} autoComplete="new-password" required /></label><div className="auth-message success">Se confirma el correo y se habilita el rol docente. Comparte la contraseña de forma segura.</div></> : <div className="auth-message success">El rol se asignará como docente.</div>}<div className="modal-actions"><button type="button" className="outline-button" onClick={closeInviteModal}>Cancelar</button><button type="submit" className="primary-button" disabled={saving}>{saving ? accessMode === 'pilot' ? 'Creando…' : 'Enviando…' : accessMode === 'pilot' ? 'Asignar acceso →' : 'Enviar invitación →'}</button></div></form></div></div>}
-  </>
+  // Operación para la vista Institucional (Colegio Demo)
+  const handleCreateInstitutionalTeacher = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!canAddMore) {
+      setStatus({
+        kind: 'error',
+        message: `El colegio ha alcanzado el límite de ${institution.licenseLimit} licencias contratadas. Pausa a un profesor en desuso para asignar la vacante.`,
+      })
+      return
+    }
+    if (accessMode === 'pilot') {
+      if (pilotPassword.length < 8) {
+        setStatus({ kind: 'error', message: 'La contraseña temporal debe tener al menos 8 caracteres.' })
+        return
+      }
+      if (pilotPassword !== pilotConfirmation) {
+        setStatus({ kind: 'error', message: 'Las contraseñas no coinciden.' })
+        return
+      }
+    }
+    setSaving(true)
+    setStatus(null)
+    onAddTeacher({
+      displayName: displayName.trim(),
+      email: email.trim().toLowerCase(),
+      password: accessMode === 'pilot' ? pilotPassword : undefined,
+    })
+    setSaving(false)
+    closeInviteModal()
+    setStatus({
+      kind: 'success',
+      message: accessMode === 'pilot'
+        ? `Licencia asignada: El profesor ${displayName} puede ingresar hoy mismo con su contraseña temporal.`
+        : `Invitación enviada a ${email}. Se consumió 1 licencia del paquete del colegio.`,
+    })
+  }
+
+  const activeRoster = userSource === 'platform' ? realUsers : teachers
+  const filteredUsers = activeRoster.filter((user) => {
+    const matchesSearch =
+      user.displayName.toLowerCase().includes(searchFilter.toLowerCase()) ||
+      user.email.toLowerCase().includes(searchFilter.toLowerCase())
+    if (!matchesSearch) return false
+
+    if (statusTab === 'active') return user.status === 'Activo'
+    if (statusTab === 'pending') return user.status === 'Pendiente'
+    if (statusTab === 'disabled') return user.status === 'Bloqueado'
+    return true
+  })
+
+  return (
+    <>
+      <AdminScopeBanner
+        adminScope={adminScope}
+        setAdminScope={setAdminScope}
+        institution={institution}
+        onGoToInstitutionDemo={onHome}
+      />
+
+      {/* Pestañas de origen de docentes: Cuentas Reales de la Plataforma vs Claustro del Colegio */}
+      <div className="admin-filter-tabs" style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
+        <button
+          type="button"
+          className={`admin-filter-tab ${userSource === 'platform' ? 'active' : ''}`}
+          onClick={() => {
+            setUserSource('platform')
+            setAdminScope('superadmin')
+            setStatus(null)
+          }}
+          style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
+        >
+          🌐 Docentes de la Plataforma (Cuentas Reales Supabase · {realUsers.length})
+        </button>
+        <button
+          type="button"
+          className={`admin-filter-tab ${userSource === 'institution' ? 'active' : ''}`}
+          onClick={() => {
+            setUserSource('institution')
+            setAdminScope('institution')
+            setStatus(null)
+          }}
+          style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
+        >
+          🏫 Claustro Institucional ({institution.name} · {teachers.length})
+        </button>
+      </div>
+
+      {userSource === 'platform' ? (
+        <>
+          <PageIntro
+            eyebrow="CUENTAS DE LA PLATAFORMA · SUPERADMINISTRADOR"
+            title="Directorio de Docentes Independientes y Registrados"
+            description="Gestiona todas las cuentas de docentes registradas en Supabase. Asigna contraseñas directas, envía invitaciones oficiales y administra suspensiones o reactivaciones."
+            action={
+              canManageUsers ? (
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    setStatus(null)
+                    setAccessMode('pilot')
+                    setShowInvite(true)
+                  }}
+                >
+                  ＋ Crear o invitar docente
+                </button>
+              ) : (
+                <span className="demo-admin-tag">Acceso de solo lectura</span>
+              )
+            }
+          />
+
+          <div className="admin-notice">
+            <span>✓</span>
+            <div>
+              <b>{adminData ? 'Directorio en tiempo real conectado con Supabase.' : 'Cargando directorio de la plataforma…'}</b>
+              <p>{adminData ? `${realUsers.length} cuentas registradas en total en la base de datos.` : 'Consultando las cuentas registradas en el backend…'}</p>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <PageIntro
+            eyebrow={`CLAUSTRO DOCENTE · ${institution.name.toUpperCase()}`}
+            title="Directorio Docente y Asignación de Licencias"
+            description={`Gestiona las ${institution.licenseLimit} plazas contratadas por el colegio. Asigna credenciales directas y administra licencias médicas.`}
+            action={
+              <button
+                className="primary-button"
+                onClick={() => {
+                  setStatus(null)
+                  setAccessMode('pilot')
+                  setShowInvite(true)
+                }}
+              >
+                ＋ Asignar licencia a profesor
+              </button>
+            }
+          />
+
+          <div className="license-hero-card" style={{ marginBottom: '16px', padding: '14px 18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <b style={{ fontSize: '13px', color: '#1a3e33' }}>
+                  Estado del paquete contratado ({institution.planName}):
+                </b>
+                <div style={{ fontSize: '12px', color: '#4a6e5f', marginTop: '2px' }}>
+                  <b>{activeCount}</b> de <b>{institution.licenseLimit}</b> licencias ocupadas ·
+                  <span style={{ color: availableLicenses > 0 ? '#287758' : '#c47a18', fontWeight: 'bold', marginLeft: '5px' }}>
+                    {availableLicenses > 0 ? `${availableLicenses} cupos disponibles` : 'Sin cupos libres'}
+                  </span>
+                </div>
+              </div>
+              <div className="license-track" style={{ width: '220px', height: '8px' }}>
+                <div
+                  className={`license-fill ${activeCount >= institution.licenseLimit ? 'full' : ''}`}
+                  style={{ width: `${Math.min(100, (activeCount / institution.licenseLimit) * 100)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {status && <div className={`auth-message ${status.kind}`}>{status.message}</div>}
+
+      <div className="admin-filter-bar">
+        <div className="admin-search-wrap">
+          <span className="search-icon">🔍</span>
+          <input
+            type="text"
+            placeholder={userSource === 'platform' ? 'Buscar cuenta por nombre o correo...' : 'Buscar profesor por nombre o correo...'}
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+          />
+        </div>
+        <div className="admin-filter-tabs">
+          <button type="button" className={`admin-filter-tab ${statusTab === 'all' ? 'active' : ''}`} onClick={() => setStatusTab('all')}>
+            Todos ({activeRoster.length})
+          </button>
+          <button type="button" className={`admin-filter-tab ${statusTab === 'active' ? 'active' : ''}`} onClick={() => setStatusTab('active')}>
+            🟢 Activos ({activeRoster.filter((t) => t.status === 'Activo').length})
+          </button>
+          {userSource === 'platform' && (
+            <button type="button" className={`admin-filter-tab ${statusTab === 'pending' ? 'active' : ''}`} onClick={() => setStatusTab('pending')}>
+              🟡 Pendientes ({activeRoster.filter((t) => t.status === 'Pendiente').length})
+            </button>
+          )}
+          <button type="button" className={`admin-filter-tab ${statusTab === 'disabled' ? 'active' : ''}`} onClick={() => setStatusTab('disabled')}>
+            ⚪ {userSource === 'platform' ? 'Desactivados' : 'En licencia / Pausados'} ({activeRoster.filter((t) => t.status === 'Bloqueado').length})
+          </button>
+        </div>
+      </div>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>{userSource === 'platform' ? `Cuentas de Docentes (${filteredUsers.length})` : 'Cuerpo Docente de la Institución'}</h2>
+            <p>
+              {userSource === 'platform'
+                ? 'Historial de registros y gestión de credenciales en Supabase Auth y base de datos.'
+                : 'Pausar a un profesor por licencia médica libera temporalmente su plaza para un suplente sin pagar doble.'}
+            </p>
+          </div>
+          <span className="tag published">{userSource === 'platform' ? 'Supabase' : institution.name}</span>
+        </div>
+
+        <div className="table-scroll-hint-bar">
+          <span className="table-scroll-hint">↔ Desliza la tabla horizontalmente para ver todos los datos</span>
+        </div>
+
+        <div className="results-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Docente</th>
+                <th>Rol</th>
+                <th>Estado</th>
+                <th>Fecha de registro</th>
+                <th>Último acceso</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.length ? (
+                filteredUsers.map((user) => {
+                  const isBlocked = user.status === 'Bloqueado'
+                  const isAdmin = user.roles.includes('admin')
+                  return (
+                    <tr key={user.id || user.email}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span className="admin-avatar">
+                            {user.displayName.split(' ').map((p) => p[0]).slice(0, 2).join('')}
+                          </span>
+                          <div>
+                            <b>{user.displayName}</b>
+                            <small>{user.email}</small>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className="admin-role">
+                          {user.roles.map((r) => (r === 'admin' ? 'Administrador' : 'Docente')).join(' · ')}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`result-status ${isBlocked ? 'timeout' : user.status === 'Pendiente' ? 'waiting' : ''}`}>
+                          {isBlocked
+                            ? userSource === 'platform' ? 'Desactivado' : 'Pausado (Licencia médica)'
+                            : user.status === 'Pendiente'
+                            ? 'Pendiente de confirmación'
+                            : 'Activo'}
+                        </span>
+                      </td>
+                      <td>{formatDate(user.createdAt)}</td>
+                      <td>{user.lastSignInAt ? formatDate(user.lastSignInAt) : 'Aún no ingresa'}</td>
+                      <td>
+                        {isAdmin ? (
+                          <span className="muted">Protegido (Admin)</span>
+                        ) : userSource === 'platform' ? (
+                          <div className="table-actions">
+                            {isBlocked ? (
+                              <button
+                                type="button"
+                                className="text-button"
+                                style={{ color: '#287758' }}
+                                disabled={removingId === user.id}
+                                onClick={() => void handleToggleRealUser(user, 'enable')}
+                                title="Reactivar la cuenta del docente en Supabase"
+                              >
+                                {removingId === user.id ? 'Reactivando…' : 'Reactivar usuario'}
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="text-button"
+                                  disabled={resendingId === user.id}
+                                  onClick={() => void handleResendAccess(user)}
+                                  title="Enviar enlace para que el docente cree o restablezca su contraseña"
+                                >
+                                  {resendingId === user.id ? 'Enviando…' : user.status === 'Pendiente' ? 'Reenviar acceso' : 'Restablecer acceso'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="text-button danger-text-button"
+                                  disabled={removingId === user.id}
+                                  onClick={() => void handleToggleRealUser(user, 'disable')}
+                                  title="Pausar o desactivar la cuenta del docente en Supabase"
+                                >
+                                  {removingId === user.id ? 'Desactivando…' : 'Desactivar usuario'}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="table-actions">
+                            {isBlocked ? (
+                              <button
+                                type="button"
+                                className="text-button"
+                                style={{ color: '#287758' }}
+                                onClick={() => onToggleTeacherStatus(user, 'enable')}
+                                title="Reactivar la licencia para este profesor"
+                              >
+                                Reactivar profesor
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                className="text-button danger-text-button"
+                                onClick={() => onToggleTeacherStatus(user, 'disable')}
+                                title="Pausar el acceso del profesor para liberar su cupo a un suplente"
+                              >
+                                Pausar (Licencia médica)
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })
+              ) : (
+                <tr>
+                  <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#688275' }}>
+                    {userSource === 'platform' && !adminData
+                      ? 'Cargando usuarios desde Supabase…'
+                      : 'No se encontraron docentes con los filtros aplicados.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Modal de alta/invitación */}
+      {showInvite && (
+        <div className="modal-backdrop">
+          <div className="modal-card admin-invite-modal">
+            <div className="modal-head">
+              <div>
+                <p className="eyebrow">{userSource === 'platform' ? 'ALTA DE DOCENTE EN SUPABASE' : 'ASIGNACIÓN DE LICENCIA DOCENTE'}</p>
+                <h2>{accessMode === 'pilot' ? 'Asignar contraseña directa' : 'Invitar docente por correo'}</h2>
+                <p className="modal-subtitle">
+                  {accessMode === 'pilot'
+                    ? 'Recomendado: Define usuario y contraseña temporal para que el docente ingrese hoy mismo.'
+                    : 'El docente recibirá un enlace en su correo para activar su cuenta.'}
+                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={closeInviteModal}>×</button>
+            </div>
+
+            <div className="access-mode-toggle" role="tablist" aria-label="Tipo de acceso">
+              <button
+                type="button"
+                className={accessMode === 'pilot' ? 'primary-button' : 'outline-button'}
+                onClick={() => { setStatus(null); setAccessMode('pilot') }}
+              >
+                Contraseña directa (Inmediata)
+              </button>
+              <button
+                type="button"
+                className={accessMode === 'invite' ? 'primary-button' : 'outline-button'}
+                onClick={() => { setStatus(null); setAccessMode('invite') }}
+              >
+                Invitación por correo
+              </button>
+            </div>
+
+            <form className="auth-form" onSubmit={userSource === 'platform' ? (accessMode === 'pilot' ? createPilotTeacher : inviteTeacher) : handleCreateInstitutionalTeacher}>
+              <label>
+                Nombre del docente (con título)
+                <input
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  placeholder="Ej. Prof. Lucía Martínez"
+                  minLength={2}
+                  required
+                />
+              </label>
+
+              <label>
+                Correo electrónico
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="docente@institucion.edu"
+                  required
+                />
+              </label>
+
+              {accessMode === 'pilot' && (
+                <>
+                  <label>
+                    Contraseña temporal
+                    <input
+                      type="password"
+                      value={pilotPassword}
+                      onChange={(event) => setPilotPassword(event.target.value)}
+                      placeholder="Mínimo 8 caracteres"
+                      minLength={8}
+                      autoComplete="new-password"
+                      required
+                    />
+                  </label>
+                  <label>
+                    Repetir contraseña
+                    <input
+                      type="password"
+                      value={pilotConfirmation}
+                      onChange={(event) => setPilotConfirmation(event.target.value)}
+                      placeholder="Repite la contraseña"
+                      minLength={8}
+                      autoComplete="new-password"
+                      required
+                    />
+                  </label>
+                </>
+              )}
+
+              <div className="auth-message success">
+                {userSource === 'platform'
+                  ? accessMode === 'pilot'
+                    ? 'Se creará el perfil docente con correo confirmado en Supabase para acceso inmediato.'
+                    : 'Se enviará una invitación segura por correo con el rol de docente.'
+                  : `Esta acción consumirá 1 de los ${availableLicenses} cupos de licencia disponibles para ${institution.name}.`}
+              </div>
+
+              <div className="modal-actions">
+                <button type="button" className="outline-button" onClick={closeInviteModal}>Cancelar</button>
+                <button type="submit" className="primary-button" disabled={saving}>
+                  {saving ? (accessMode === 'pilot' ? 'Creando cuenta…' : 'Enviando…') : (accessMode === 'pilot' ? 'Asignar acceso →' : 'Enviar invitación →')}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
-function AdminAuditView({ attempts, rooms, adminData, onHome }: { attempts: StudentAttempt[]; rooms: Room[]; adminData: AdminSnapshot | null; onHome: () => void }) { const events = adminData ? adminData.auditEvents.map((event) => ({ type: event.eventType, subject: event.actorName, room: event.roomName, at: event.createdAt, detail: '' })) : attempts.flatMap((attempt) => attempt.events.map((event) => ({ ...event, subject: attempt.studentName, room: attempt.roomName }))).sort((left, right) => right.at.localeCompare(left.at)); return <><PageIntro eyebrow="ADMINISTRACIÓN" title="Auditoría de actividad" description="Registro de eventos relevantes para revisar trazabilidad y seguridad." action={<span className="tag published">{adminData ? 'Solo lectura · Servidor' : 'Cargando auditoría'}</span>} /><div className="admin-notice"><span>{adminData ? '✓' : '!'}</span><div><b>{adminData ? 'Auditoría sincronizada con Supabase.' : 'Cargando auditoría del servidor.'}</b><p>{adminData ? 'Los eventos se leen desde el registro protegido de la plataforma.' : 'Mientras carga, se conserva la trazabilidad local como respaldo temporal.'}</p></div></div><section className="panel"><div className="panel-heading"><div><h2>Eventos recientes</h2><p>{events.length} eventos registrados · {adminData?.metrics.rooms ?? rooms.length} salas visibles</p></div></div>{events.length ? <div className="audit-list">{events.slice(0, 20).map((event, index) => <div className="audit-row" key={`${event.at}-${index}`}><span className="audit-icon">{event.type === 'finished' ? '✓' : event.type === 'timeout' ? '◷' : event.type === 'omitted' ? '→' : '•'}</span><div><b>{auditEventLabel(event.type)}</b><small>{event.subject} · {event.room}{event.detail ? ` · ${event.detail}` : ''}</small></div><time>{formatDate(event.at)}</time></div>)}</div> : <div className="results-empty"><span>◌</span><h3>Aún no hay eventos</h3><p>Los eventos aparecerán cuando un estudiante ingrese y responda una evaluación.</p></div>}</section></> }
+function AdminAuditView({
+  adminScope,
+  setAdminScope,
+  institution,
+  adminData,
+  onHome,
+}: {
+  adminScope: 'superadmin' | 'institution'
+  setAdminScope: (scope: 'superadmin' | 'institution') => void
+  institution: Institution
+  adminData: AdminSnapshot | null
+  onHome: () => void
+}) {
+  const [auditSource, setAuditSource] = useState<'platform' | 'institution'>(() => adminScope === 'superadmin' ? 'platform' : 'institution')
+  const [searchFilter, setSearchFilter] = useState('')
 
-function AdminRoomsView({ rooms, activities, adminData, onHome }: { rooms: Room[]; activities: Activity[]; adminData: AdminSnapshot | null; onHome: () => void }) { const globalRooms = adminData?.rooms ?? []; return <><PageIntro eyebrow="ADMINISTRACIÓN" title="Salas globales" description="Supervisa el ciclo de las evaluaciones sin modificar la configuración del docente." action={<span className="tag published">{adminData ? 'Solo lectura · Supabase' : 'Cargando salas'}</span>} /><div className="admin-notice"><span>{adminData ? '✓' : '!'}</span><div><b>{adminData ? 'Vista global sincronizada.' : 'Cargando salas globales.'}</b><p>{adminData ? 'La administración puede supervisar las salas de todos los docentes sin modificar su configuración.' : 'La copia local se mantiene disponible mientras se consulta el servidor.'}</p></div></div><section className="panel"><div className="panel-heading"><div><h2>{adminData ? globalRooms.length : rooms.length} salas visibles</h2><p>Las salas archivadas conservan su trazabilidad y resultados.</p></div></div><div className="table-scroll-hint-bar"><span className="table-scroll-hint">↔ Desliza la tabla horizontalmente para ver todos los datos</span></div><div className="results-table-wrap"><table><thead><tr><th>Sala</th><th>Docente</th><th>Código</th><th>Estado</th><th>Preguntas</th><th>Estudiantes</th><th>Actividades</th></tr></thead><tbody>{adminData ? globalRooms.map((room) => <tr key={room.id}><td><b>{room.name}</b><small>{formatDate(room.createdAt)}</small></td><td>{room.ownerName}</td><td>{room.code}</td><td><span className={`result-status ${room.status === 'active' ? '' : 'timeout'}`}>{roomStatusLabel(room.status)}</span></td><td>{room.questionCount}</td><td>Máx. {room.limit}</td><td className="room-activities-cell" title={room.activities.map((a) => a.title).join(' · ')}>{room.activities.length > 2 ? `${room.activities.slice(0, 2).map((a) => a.title).join(' · ')} (+${room.activities.length - 2} más)` : (room.activities.map((activity) => activity.title).join(' · ') || 'Sin actividades')}</td></tr>) : rooms.map((room) => <tr key={room.id}><td><b>{room.name}</b><small>{room.instructions}</small></td><td>Docente local</td><td>{room.code}</td><td><span className={`result-status ${room.status === 'active' ? '' : 'timeout'}`}>{roomStatusLabel(room.status)}</span></td><td>{room.questionCount}</td><td>Máx. {room.limit}</td><td className="room-activities-cell" title={room.activities.map((id) => activities.find((activity) => activity.id === id)?.title ?? 'Actividad').join(' · ')}>{room.activities.length > 2 ? `${room.activities.slice(0, 2).map((id) => activities.find((activity) => activity.id === id)?.title ?? 'Actividad').join(' · ')} (+${room.activities.length - 2} más)` : (room.activities.map((id) => activities.find((activity) => activity.id === id)?.title ?? 'Actividad').join(' · '))}</td></tr>)}</tbody></table></div></section></> }
+  useEffect(() => {
+    setAuditSource(adminScope === 'superadmin' ? 'platform' : 'institution')
+  }, [adminScope])
+
+  // Eventos reales leídos de la tabla PostgreSQL audit_events en Supabase
+  const realAuditLogs = (adminData?.auditEvents ?? []).map((event) => {
+    const metaDetail = event.metadata && typeof event.metadata === 'object' && 'detail' in event.metadata
+      ? String(event.metadata.detail)
+      : event.metadata && typeof event.metadata === 'object' && 'action' in event.metadata
+      ? `Acción: ${String(event.metadata.action)}`
+      : ''
+    return {
+      id: event.id,
+      type: event.eventType,
+      subject: event.actorName,
+      detail: metaDetail || (event.roomName && event.roomName !== 'Plataforma' ? `Sala: ${event.roomName}` : 'Operación de plataforma'),
+      at: event.createdAt,
+    }
+  })
+
+  // Eventos simulados del Colegio Demo para exposición
+  const demoAuditLogs = [
+    { id: 'ev-1', type: 'teacher_created', subject: 'Prof. Lucía Martínez', at: '2026-11-03T08:42:00Z', detail: 'Licencia institucional asignada con credencial directa' },
+    { id: 'ev-2', type: 'teacher_suspended', subject: 'Prof. Paola Arce', at: '2026-10-25T10:15:00Z', detail: 'Acceso pausado por licencia médica (Cupo liberado)' },
+    { id: 'ev-3', type: 'teacher_reactivated', subject: 'Prof. Marco Quispe', at: '2026-10-20T14:30:00Z', detail: 'Licencia reactivada por reincorporación' },
+    { id: 'ev-4', type: 'teacher_created', subject: 'Prof. Fernando Rojas', at: '2026-10-10T09:00:00Z', detail: 'Alta de suplente en vacante disponible' },
+    { id: 'ev-5', type: 'teacher_access_recovery_sent', subject: 'Prof. Carmen Morales', at: '2026-10-05T11:20:00Z', detail: 'Enlace para restablecer contraseña solicitado' },
+  ]
+
+  const activeLogs = auditSource === 'platform' ? realAuditLogs : demoAuditLogs
+
+  const filteredLogs = activeLogs.filter((l) =>
+    l.subject.toLowerCase().includes(searchFilter.toLowerCase()) ||
+    l.detail.toLowerCase().includes(searchFilter.toLowerCase()) ||
+    auditEventLabel(l.type).toLowerCase().includes(searchFilter.toLowerCase())
+  )
+
+  return (
+    <>
+      <AdminScopeBanner
+        adminScope={adminScope}
+        setAdminScope={setAdminScope}
+        institution={institution}
+        onGoToInstitutionDemo={onHome}
+      />
+
+      {/* Selector de origen de auditoría */}
+      <div className="admin-filter-tabs" style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
+        <button
+          type="button"
+          className={`admin-filter-tab ${auditSource === 'platform' ? 'active' : ''}`}
+          onClick={() => {
+            setAuditSource('platform')
+            setAdminScope('superadmin')
+          }}
+          style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
+        >
+          🌐 Auditoría Global de Supabase ({realAuditLogs.length} eventos)
+        </button>
+        <button
+          type="button"
+          className={`admin-filter-tab ${auditSource === 'institution' ? 'active' : ''}`}
+          onClick={() => {
+            setAuditSource('institution')
+            setAdminScope('institution')
+          }}
+          style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
+        >
+          🏫 Movimientos Institucionales ({institution.name})
+        </button>
+      </div>
+
+      <PageIntro
+        eyebrow={auditSource === 'platform' ? 'LIBRO DE AUDITORÍA · SUPABASE' : `HISTORIAL INSTITUCIONAL · ${institution.name.toUpperCase()}`}
+        title={auditSource === 'platform' ? 'Registro Inmutable de Eventos de la Plataforma' : 'Registro de Accesos y Licencias Docentes'}
+        description={
+          auditSource === 'platform'
+            ? 'Historial de eventos de seguridad y administración registrado directamente en la tabla audit_events de Supabase con protección estricta contra eliminación o alteración.'
+            : 'Historial administrativo de asignación de licencias, altas de profesores, licencias médicas y gestión de credenciales.'
+        }
+        action={<span className="tag published">{auditSource === 'platform' ? 'Supabase Inmutable' : 'Registro Local'}</span>}
+      />
+
+      <div className="admin-filter-bar">
+        <div className="admin-search-wrap">
+          <span className="search-icon">🔍</span>
+          <input
+            type="text"
+            placeholder="Buscar por usuario, acción o detalle..."
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>
+              {auditSource === 'platform'
+                ? `Eventos Registrados en la Base de Datos (${filteredLogs.length})`
+                : `Historial de Movimientos de Licencias (${filteredLogs.length})`}
+            </h2>
+            <p>
+              {auditSource === 'platform'
+                ? 'Eventos protegidos con trigger PostgreSQL que impide UPDATE y DELETE.'
+                : 'Garantía de transparencia administrativa para auditorías escolares.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="audit-list">
+          {filteredLogs.length ? (
+            filteredLogs.map((log) => (
+              <div className="audit-row" key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span className="audit-icon">🛡️</span>
+                  <div>
+                    <b>{auditEventLabel(log.type)}: {log.subject}</b>
+                    <small>{log.detail}</small>
+                  </div>
+                </div>
+                <time style={{ fontSize: '11px', color: '#6e8478', whiteSpace: 'nowrap' }}>
+                  {formatDateTime(log.at)}
+                </time>
+              </div>
+            ))
+          ) : (
+            <div className="results-empty" style={{ padding: '32px 16px', textAlign: 'center' }}>
+              <span>◌</span>
+              <h3>No hay eventos registrados</h3>
+              <p>
+                {auditSource === 'platform' && !adminData
+                  ? 'Consultando eventos desde Supabase…'
+                  : 'Los eventos aparecerán conforme se creen, pausen o modifiquen accesos.'}
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+    </>
+  )
+}
 
 interface FormatCatalogItem {
   id: string
@@ -6501,10 +7808,48 @@ function formatDateTime(value?: string | null): string {
   return `${day}/${month}/${year} · ${hours}:${minutes}`
 }
 
+function formatTimeWithSeconds(value?: string | null): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (isNaN(d.getTime())) return String(value)
+  const day = d.getDate().toString().padStart(2, '0')
+  const month = (d.getMonth() + 1).toString().padStart(2, '0')
+  const year = d.getFullYear()
+  const hours = d.getHours().toString().padStart(2, '0')
+  const minutes = d.getMinutes().toString().padStart(2, '0')
+  const seconds = d.getSeconds().toString().padStart(2, '0')
+  return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
+}
+
+function formatDurationSeconds(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.round(seconds || 0))
+  const mins = Math.floor(safeSeconds / 60)
+  const secs = safeSeconds % 60
+  if (mins > 0) return `${mins} min ${secs} s`
+  return `${secs} s`
+}
+
 function formatDate(value: string): string {
   return formatDateTime(value)
 }
-function auditEventLabel(type: string): string { return type === 'joined' ? 'Ingreso a la evaluación' : type === 'answer_submitted' ? 'Respuesta registrada' : type === 'omitted' ? 'Pregunta omitida' : type === 'navigated_back' ? 'Regreso a pregunta anterior' : type === 'timeout' ? 'Tiempo agotado' : type === 'finished' ? 'Intento finalizado' : type.replaceAll('_', ' ') }
+
+function auditEventLabel(type: string): string {
+  switch (type) {
+    case 'joined': return 'Ingreso a la evaluación'
+    case 'answer_submitted': return 'Respuesta registrada'
+    case 'omitted': return 'Pregunta omitida voluntariamente'
+    case 'navigated_back': return 'Regreso a pregunta anterior'
+    case 'timeout': return 'Tiempo agotado (Cierre de examen)'
+    case 'finished': return 'Evaluación entregada a tiempo'
+    case 'teacher_created': return 'Alta de docente (Credencial directa)'
+    case 'teacher_credential_updated': return 'Credencial docente actualizada'
+    case 'teacher_invited': return 'Invitación enviada a docente'
+    case 'teacher_suspended': return 'Docente en licencia / Acceso pausado'
+    case 'teacher_reactivated': return 'Docente reactivado'
+    case 'teacher_access_recovery_sent': return 'Enlace de recuperación enviado'
+    default: return type.replaceAll('_', ' ')
+  }
+}
 function studentAttemptKey(roomId: string, name: string): string { return roomId + '::' + name.trim().toLowerCase() }
 function sameAttemptIdentity(left: StudentAttempt, right: StudentAttempt): boolean {
   return left.studentName.trim().toLowerCase() === right.studentName.trim().toLowerCase() && (left.roomId === right.roomId || left.roomCode.trim().toUpperCase() === right.roomCode.trim().toUpperCase())

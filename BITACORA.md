@@ -1119,6 +1119,114 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
   - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción Vite exitosos en 292ms.
 
 
+### Sincronización del Directorio Maestro y Restauración de Funcionalidades Reales · 2026-11-04
+
+- **Estado:** Implementado 100% local en `src/App.tsx`. Verificado con 18 suites y 126/126 pruebas Vitest aprobadas (100% éxito) y compilación de producción TypeScript/Vite (`npm run build`) en 625ms.
+- **Motivación:**
+  - El usuario advirtió que con la incorporación de la demo institucional del Colegio San Simón se había ocultado el acceso al historial de registros de los docentes independientes y las acciones reales de creación y desactivación de cuentas en Supabase.
+- **Solución implementada:**
+  1. *Directorio Docente Dual en `AdminUsersView`:*
+     - Se integró un selector de pestañas destacado:
+       - **🌐 Docentes de la Plataforma (Cuentas Reales Supabase):** Muestra el listado de docentes independientes reales leídos desde la base de datos (`adminData.users`).
+       - **🏫 Claustro Institucional (Colegio San Simón Demo):** Muestra la vista del colegio cliente con el medidor de 20 licencias para demostraciones comerciales.
+     - **Restauración de acciones reales en el backend de Supabase:**
+       - `＋ Crear o invitar docente`: Modal funcional con opción de **Contraseña directa** (Edge Function `admin-create-pilot-teacher`) e **Invitación por correo** (Edge Function `admin-invite-teacher`).
+       - **Reenviar / Restablecer acceso:** Llama a la Edge Function `admin-resend-access` para enviar el enlace de recuperación al correo del profesor.
+       - **Desactivar usuario / Pausar:** Llama a `admin-remove-user` con `action: 'disable'`.
+       - **Reactivar usuario:** Llama a `admin-remove-user` con `action: 'enable'`.
+  2. *Auditoría Dual en `AdminAuditView`:*
+     - Pestaña para **Auditoría Global de Supabase**, leyendo directamente los registros inmutables de la tabla PostgreSQL `audit_events` leídos por `admin-platform-data`.
+     - Pestaña para **Movimientos Institucionales** del colegio demo.
+- **Verificación técnica:**
+  - `npm.cmd run test`: 18 suites pasadas, 126/126 pruebas Vitest aprobadas.
+  - `npm.cmd run build`: 0 errores TypeScript, compilación y empaquetado Vite aprobados en 625ms.
+  - Servidor Vite activo en `http://localhost:5173/?panel=admin`.
+
+- **Estado:** Implementado 100% localmente en frontend (`src/App.tsx`), estilos (`src/index.css`) y pruebas unitarias (`src/lib/superadminAndInstitution.test.ts`). Verificado con 18 suites y 126/126 pruebas Vitest aprobadas (100% éxito) y compilación de producción TypeScript/Vite (`npm run build`) en 886ms.
+- **Motivación y justificación del modelo:**
+  - Se descartó el modelo anterior de vigilancia en vivo y notas de alumnos: un director escolar no adquiere software para invadir la autonomía del docente ni espiar respuestas de estudiantes en el aula.
+  - La justificación real de compra para una institución educativa radica en:
+    1. **Propiedad y custodia institucional del banco de preguntas y evaluaciones.**
+    2. **Control estricto de cupos y licencias docentes contratadas** (alta con credencial directa, pausa por licencia médica liberando cupo para suplentes, reactivación).
+    3. **Métricas de retorno de inversión y adopción escolar** (% de profesores activos evaluando, volumen de pruebas en el ciclo escolar).
+  - Estructura multitenant SaaS:
+    - **Panel Maestro de Superadministrador (Elmer Yaletorrez):** Gestión global de instituciones clientes, cupos de licencias vendidas, altas de colegios y supervisión de disponibilidad.
+    - **Panel Institucional del Colegio Demo ("Unidad Educativa San Simón"):** Entorno realista para demostraciones comerciales a directores de colegios, con su propio cupo contratado (20 licencias, 14 en uso, 6 disponibles) y su claustro docente aislado.
+- **Detalle de cambios implementados:**
+  1. *Eliminación de espionaje docente:* Quedan completamente suprimidas del Administrador las vistas de salas de examen (`rooms`), respuestas y notas de alumnos (`results`) y el modal forense de reclamos (`ClaimEvidenceModal`). El rol `admin` solo accede a `overview`, `adminUsers` y `adminAudit`.
+  2. *Barra de Alternancia Rápida (`AdminScopeBanner`):* Permite alternar en un clic entre la visión global de Superadministrador SaaS y la demostración comercial del Colegio San Simón.
+  3. *Panel Maestro SaaS (`AdminDashboard` - Superadmin):*
+     - Métricas consolidadas: Colegios clientes (3), Licencias vendidas (65), Docentes activos totales (49), Disponibilidad SaaS (100%).
+     - Catálogo de instituciones con plan contratado, límite de licencias, contacto institucional y fecha de vigencia.
+     - Modal de alta rápida de nuevos colegios clientes (`RegisterInstitutionModal`).
+  4. *Panel Institucional del Colegio Demo (`AdminDashboard` - Institución):*
+     - Tarjeta destacada de control de cupos con barra visual de progreso y contador en tiempo real de licencias disponibles.
+     - Indicadores de adopción escolar (85% docentes evaluando en el ciclo, 184 pruebas realizadas).
+  5. *Directorio Docente Institucional (`AdminUsersView`):*
+     - Enforzamiento del límite de licencias contratadas: no permite altas si se agotó el cupo contratado.
+     - Alta docente por credencial directa o invitación.
+     - Pausa de acceso por licencia médica: libera inmediatamente el cupo para que el colegio asigne un suplente sin costo adicional.
+     - Reactivación docente con un clic al concluir la suplencia.
+  6. *Historial de Accesos Limpio (`AdminAuditView`):* Registro administrativo enfocado en licencias, reincorporaciones y seguridad de acceso.
+  7. *Nueva suite de pruebas:* `src/lib/superadminAndInstitution.test.ts` (9 pruebas) validando totales globales SaaS, enforzamiento de límites, liberación/reasignación de cupos y aislamiento multi-institución.
+- **Incidencia técnica de Supabase resuelta:**
+  - El error `removeChild on Node` en el panel de Supabase se originó por la extensión Google Chrome Translate al inyectar etiquetas `<font>` en el árbol DOM gestionado por React. Solución: desactivar la traducción automática en el dominio de Supabase y recargar la página.
+- **Verificación técnica:**
+  - `npm.cmd run test`: **18 suites pasadas, 126/126 pruebas aprobadas** (100%).
+  - `npm.cmd run build`: 0 errores TypeScript, compilación y empaquetado Vite aprobados en 886ms.
+  - Cero modificaciones a la versión pública (desarrollo 100% local en `localhost:5173`).
+
+- **Estado:** Implementado en interfaz web, estilos CSS para pantalla e impresión Carta, Edge Functions administrativas y migración SQL de inmutabilidad estricta; verificado con 18 suites y 127/127 pruebas Vitest aprobadas (100% éxito), más compilación de producción TypeScript/Vite (`npm run build`) en 437ms.
+- **Detalle de implementaciones realizadas en Fase 6:**
+  1. *Pilar 1: Tablero de Supervisión Escolar (`AdminDashboard`):*
+     - Reorientación completa del panel desde el rol y perspectiva de un **Director de Secundaria**:
+       - **Tarjeta de Bienvenida Directiva:** Monitoreo del pulso escolar en vivo con píldoras de estado (`🟢 X evaluaciones en curso en este momento`, `👨‍🏫 X profesores en claustro`, `📝 X exámenes rendidos`, `⏱️ X cierres por tiempo`).
+       - **Métricas Pedagógicas y de Gestión:** Cuerpo docente activo, evaluaciones en aula hoy, estudiantes evaluados acumulados y régimen de cumplimiento escolar (% de conclusión satisfactoria).
+       - **Monitoreo en Vivo de Aulas en Evaluación:** Tarjetas dinámicas con pulso verde parpadeante (`live-pulse-dot`), código de sala destacado, profesor titular a cargo, cantidad de alumnos rindiendo en tiempo real y botón de supervisión directa.
+       - **Estado de Aulas Despejadas:** Vista amigable y reconfortante cuando no hay exámenes en curso.
+       - **Supervisión Rápida del Claustro:** Cuadro de profesores con salas creadas, último acceso y botón hacia el directorio completo.
+  2. *Pilar 2: Cero Burocracia Técnica:*
+     - Erradicación de jerga técnica y de desarrollo (eliminadas referencias a RLS, tokens, PostgREST o UUIDs en las vistas del director).
+     - Sustitución por el bloque directivo **"Garantías de Gestión Escolar"**:
+       - *Libro Digital Inmutable:* Todo intento y respuesta se certifica para resolver quejas con respaldo probatorio fehaciente.
+       - *Autonomía Pedagógica:* La dirección supervisa el ritmo de la secundaria respetando la autonomía de diseño y calificación de cada profesor.
+       - *Privacidad Estudiantil:* Custodia segura y cifrada sin exposición pública de notas de los menores.
+  3. *Pilar 3: Respaldo ante Reclamos (Libro Oficial de Evidencias e Incidencias — `AdminAuditView` y `ClaimEvidenceModal`):*
+     - **Buscador en Tiempo Real y Filtros Especializados:** Búsqueda por nombre de estudiante, profesor o evaluación, con filtros por situación (`⏱️ Cortes de tiempo / Timeout`, `✓ Exámenes entregados`, `⚠️ Preguntas omitidas`, `🚪 Ingresos`, `🛡️ Acciones de Dirección`).
+     - **Modal de Constancia Probatoria Institucional (`ClaimEvidenceModal`):**
+       - Diseñada para la atención directa de reclamos de padres de familia o alumnos.
+       - Encabezado oficial membretado: *"Unidad Educativa de Secundaria · Dirección Académica · Constancia de Hechos y Evidencia de Evaluación"*, con Folio oficial y fecha de emisión.
+       - **Dictamen Institucional Claro:** Diferenciación incontrovertible entre examen entregado a tiempo y examen cerrado automáticamente por expiración del tiempo reglamentario configurado por el docente (*Timeout*).
+       - Desglose cronológico pregunta por pregunta con la respuesta registrada, tiempo invertido en segundos y calificación.
+       - Trazabilidad segundo a segundo de acciones del alumno durante la prueba.
+       - **Impresión Oficial en Hoja Tamaño Carta:** Integrada con `@media print`, oculta elementos de la interfaz y genera un documento limpio listo para archivar o entregar a la familia con triple bloque de firmas: **Dirección del Colegio, Docente de Asignatura y Firma de Conformidad del Tutor / Padre de Familia**.
+  4. *Pilar 4: Directorio Docente y Gestión de Profesores (`AdminUsersView`):*
+     - Padrón oficial del claustro docente con buscador en tiempo real y pestañas por estado escolar (`Todos`, `🟢 Activos`, `🟡 Pendientes`, `⚪ En licencia / Pausados`).
+     - Métricas del claustro: total profesores, activos con salas y pendientes de primer ingreso.
+     - **Acciones Directivas Claras:**
+       - **Alta Directa por Dirección:** Modal con pestaña de *Credencial Directa* (el director define usuario y contraseña inicial de al menos 8 caracteres para que el profesor ingrese hoy mismo a evaluar) o *Invitación por Correo*.
+       - **Restablecimiento de Clave:** Envío inmediato de enlace de recuperación ante olvido de contraseña.
+       - **Pausa de Acceso / Licencia y Reactivación:** El director puede pausar temporalmente a un profesor (por licencia médica o cambio de curso) conservando intacto su historial y evaluaciones, y reactivarlo con un clic cuando se reincorpore.
+  5. *Inmutabilidad y Blindaje Forense en Base de Datos y Edge Functions:*
+     - **Migración SQL [`supabase/migrations/20261029160000_audit_events_immutability.sql`](supabase/migrations/20261029160000_audit_events_immutability.sql):**
+       - Creación del disparador PostgreSQL `trg_prevent_audit_events_mutation` que arroja una excepción terminante (`RAISE EXCEPTION`) ante cualquier intento de `UPDATE` o `DELETE` sobre `audit_events`.
+       - Políticas RLS que permiten a administradores consultar todo el libro de eventos y a usuarios autenticados insertar eventos atribuibles.
+     - **Edge Function [`supabase/functions/admin-create-pilot-teacher`](supabase/functions/admin-create-pilot-teacher/index.ts):** Creación y asignación directa de credenciales docentes con confirmación de correo automática y registro en `audit_events`.
+     - **Edge Function [`supabase/functions/admin-remove-user`](supabase/functions/admin-remove-user/index.ts):** Actualizada para soportar tanto `disable` (suspensión) como `enable` (reactivación desbaneando la cuenta) y registrar el evento administrativo.
+     - **Edge Functions [`admin-invite-teacher`](supabase/functions/admin-invite-teacher/index.ts) y [`admin-resend-access`](supabase/functions/admin-resend-access/index.ts):** Niveladas para escribir sus eventos en `audit_events`.
+  6. *Pruebas Automatizadas de la Fase 6:*
+     - Se creó la suite [`src/lib/adminDirectorSupervision.test.ts`](src/lib/adminDirectorSupervision.test.ts) (10 pruebas unitarias) cubriendo:
+       - Traducción de etiquetas de eventos a lenguaje escolar fidedigno.
+       - Formateo de duraciones en actas.
+       - Búsqueda y filtrado de incidencias y reclamos.
+       - Filtrado de docentes por estado y consulta textual.
+       - Validación de contratos de credenciales directas y suspensión/reactivación.
+- **Resultados de verificación técnica:**
+  - `npm.cmd run test`: **18 suites pasadas, 127/127 pruebas aprobadas** (100% éxito).
+  - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción Vite exitosos en 437ms.
+
+
+
 
 
 

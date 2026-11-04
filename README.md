@@ -241,18 +241,22 @@ Las salas archivadas conservan resultados y pueden duplicarse.
 
 ### Próximos focos (Orden de Fases vigente)
 
-Actualmente las **Fases 1 a 5 de la etapa v1.2** (contratos modulares de las 6 actividades, motor central, validador JSON v2, rediseño Día/Noche, creador de salas, documentos en tamaño Carta, privacidad antitrampas en servidor, Rate Limiting, guardado atómico RPC y concurrencia de 50 estudiantes) están **100 % completadas**. El desarrollo se prepara para la **Fase 6**:
+Actualmente las **Fases 1 a 6 de la etapa v1.2** (contratos modulares de las 6 actividades, motor central, validador JSON v2, rediseño Día/Noche, creador de salas, documentos en tamaño Carta, privacidad antitrampas en servidor, Rate Limiting, guardado atómico RPC, concurrencia de 50 estudiantes y el **Panel Administrativo con perspectiva de Director de Secundaria y Auditoría Inmutable**) están **100 % completadas**. El desarrollo se prepara para la **Fase 7**:
 
 1. **Fase 5 v1.2 (Completada):**
    - Edge Functions [`student-room-guest`](supabase/functions/student-room-guest/index.ts) y [`student-room-sync`](supabase/functions/student-room-sync/index.ts) niveladas al motor v1.2: retirada de `privateActivities` en `join`, validación en servidor de sala `active` y tiempo límite, y calificación tipada de los 6 contratos v1.2.
    - Guardado transaccional atómico ("todo o nada") e idempotente de `attempts` y `attempt_answers` mediante la función PostgreSQL RPC `submit_student_attempt_atomic`.
    - Control de frecuencia (*Rate Limiting*) en ingreso por código de sala e índice compuesto en `attempt_answers(attempt_id, question_index)`.
    - Pruebas de concurrencia masiva (50 estudiantes simultáneos en `concurrencyStress.test.ts`) con 0% de pérdidas y 100% de consistencia.
-2. **📍 Fase 6 (Próximo Foco — Panel Administrativo y Auditoría Inmutable):**
-   - Registrar eventos administrativos en `audit_events` asegurando su inmutabilidad mediante políticas RLS (prohibir `DELETE` y `UPDATE`).
-   - Completar la gestión administrativa real de usuarios, permisos y suspensión/reactivación.
-   - Configurar definitivamente `Site URL` y Redirect URLs en Supabase Auth y verificar descargas CSV/PDF en dispositivos Android físicos.
-3. **Fase 7 (Expansión v1.3+ a 21 Actividades y Alistamiento Pre-Comercial):**
+2. **Fase 6 v1.2 (Completada — Modelo SaaS Educativo: Superadministrador y Licencias Institucionales):**
+   - **Cero Espionaje Docente:** Eliminadas del rol administrador las vistas de salas, respuestas y notas de alumnos, preservando la autonomía de cátedra y la privacidad del aula.
+   - **Panel Maestro SaaS (Superadministrador):** Gestión global de colegios clientes, paquetes de licencias vendidas, altas de nuevas instituciones y supervisión del estado del servicio.
+   - **Panel Institucional del Colegio Demo ("Unidad Educativa San Simón"):**
+     - Control visual de cupos y licencias contratadas (14 de 20 licencias en uso, 6 cupos disponibles).
+     - Métricas de adopción escolar (85% docentes activos en el ciclo escolar, 184 evaluaciones realizadas).
+     - Directorio docente con enforzamiento de cupos: alta de profesores (credencial directa o invitación), pausa por licencia médica liberando cupo para suplentes, y reactivación sin costo.
+   - **Inmutabilidad y Blindaje Forense:** Trigger PostgreSQL `trg_prevent_audit_events_mutation` que prohíbe `UPDATE` y `DELETE` en `audit_events`, y Edge Functions niveladas (`admin-create-pilot-teacher`, `admin-remove-user`, `admin-invite-teacher` y `admin-resend-access`).
+3. **📍 Fase 7 (Próximo Foco — Expansión v1.3+ a 21 Actividades y Alistamiento Pre-Comercial):**
    - Incorporar progresivamente los 15 formatos futuros definidos en [docs/PROPUESTA_CATALOGO_21_ACTIVIDADES.md](docs/PROPUESTA_CATALOGO_21_ACTIVIDADES.md) manteniendo sincronizados el contrato JSON, el validador y la interfaz.
    - Alistamiento comercial: Política de Privacidad estudiantil, Términos de Servicio, política de retención de datos y verificación de copias de seguridad (*Backups*).
 
