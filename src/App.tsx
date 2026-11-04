@@ -403,6 +403,7 @@ function App() {
   const [templates, setTemplates] = useState<EvaluationTemplate[]>(() => readStorage('edueval-templates', []))
   const [toast, setToast] = useState('')
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null)
+  const [previewingStudentActivity, setPreviewingStudentActivity] = useState<Activity | null>(null)
   const [studentName, setStudentName] = useState('')
   const [roomCode, setRoomCode] = useState('')
   const [studentRoom, setStudentRoom] = useState<Room | null>(null)
@@ -1685,12 +1686,28 @@ function App() {
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
       {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
-      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
+      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
     {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
     {showFeedbackModal && <FeedbackModal defaultEmail={authSession?.user.email ?? ''} defaultName={displayName} onClose={() => setShowFeedbackModal(false)} onSent={() => { setShowFeedbackModal(false); notify('Se abrió tu correo para enviar la sugerencia.') }} />}
-    {selectedActivity && role !== 'student' && <ActivityPreview activity={selectedActivity} onClose={() => setSelectedActivity(null)} onDelete={role === 'teacher' ? () => void deleteActivity(selectedActivity) : undefined} />}
+    {selectedActivity && role !== 'student' && (
+      <ActivityPreview
+        activity={selectedActivity}
+        onClose={() => setSelectedActivity(null)}
+        onPreviewStudent={() => {
+          setPreviewingStudentActivity(selectedActivity)
+          setSelectedActivity(null)
+        }}
+        onDelete={role === 'teacher' ? () => void deleteActivity(selectedActivity) : undefined}
+      />
+    )}
+    {previewingStudentActivity && (
+      <StudentPreviewModal
+        activity={previewingStudentActivity}
+        onClose={() => setPreviewingStudentActivity(null)}
+      />
+    )}
     {editingActivity && (
       <ActivityForm
         initialType={editingActivity.type}
@@ -3363,14 +3380,14 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     studentExperience: 'Lectura inmersiva del caso y toma de postura entre varias opciones. Cada camino despliega consecuencias formativas explicadas.',
     contentRequirements: 'Descripción del contexto situacional, opciones de acción concretas y consecuencias formativas para cada alternativa.',
   },
-  // 5 FORMATOS FUTUROS (v1.3)
+  // ACTIVIDADES COMPLEMENTARIAS (v1.3)
   {
     id: 'multiSelect',
     icon: '☑',
     title: 'Selección de Opción Múltiple',
     subtitle: 'Múltiples respuestas correctas',
-    status: 'upcoming',
-    badge: 'Próximamente',
+    status: 'active',
+    badge: 'Activo · v1.3',
     evaluates: 'Discriminación analítica integral: identificar todos los factores o características válidas de un fenómeno sin omitir elementos esenciales.',
     studentExperience: 'Casillas de verificación múltiples (ej. «selecciona 3 de 5») con evaluación de aciertos y feedback específico por criterio.',
     contentRequirements: 'Premisa multidimensional y opciones donde dos o más son correctas bajo justificación pedagógica.',
@@ -3380,8 +3397,8 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     icon: '✍',
     title: 'Completar Espacios Guiado',
     subtitle: 'Texto con banco de conceptos',
-    status: 'upcoming',
-    badge: 'Próximamente',
+    status: 'active',
+    badge: 'Activo · v1.3',
     evaluates: 'Precisión terminológica y dominio de vocabulario técnico en un contexto de párrafo fluido o demostración estructurada.',
     studentExperience: 'Párrafo con huecos numerados y banco cerrado de conceptos para encajar en el lugar correcto.',
     contentRequirements: 'Texto descriptivo con términos clave delimitados y distractores léxicos plausibles.',
@@ -3391,11 +3408,22 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     icon: '⚡',
     title: 'Detección del Error',
     subtitle: 'Identificación de inconsistencias conceptuales',
-    status: 'upcoming',
-    badge: 'Próximamente',
+    status: 'active',
+    badge: 'Activo · v1.3',
     evaluates: 'Auditoría crítica y pensamiento analítico: capacidad de encontrar el fallo conceptual o la trampa en un procedimiento o argumento.',
     studentExperience: 'El estudiante revisa un conjunto de pasos o afirmaciones y señala cuál es el que rompe la regla o miente.',
     contentRequirements: 'Caso o procedimiento con un error sutil pero conceptualmente verificable y su fundamentación.',
+  },
+  {
+    id: 'markWords',
+    icon: '✏',
+    title: 'Marcar Palabras en el Texto',
+    subtitle: 'Identificación interactiva en párrafos de lectura',
+    status: 'active',
+    badge: 'Activo · v1.3',
+    evaluates: 'Comprensión lectora activa y capacidad de discernir términos clave diana dentro de un contexto textual continuo sin caer en distractores.',
+    studentExperience: 'El alumno lee el párrafo y resalta con su dedo o cursor los términos que cumplen el criterio pedagógico solicitado.',
+    contentRequirements: 'Párrafo estructurado con palabras diana delimitadas y términos distractores del mismo campo semántico.',
   },
   {
     id: 'gridCheck',
@@ -3429,17 +3457,6 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     evaluates: 'Recuperación activa de la memoria (Recall) y precisión terminológica: el estudiante debe formular la respuesta exacta en lugar de reconocerla pasivamente entre opciones.',
     studentExperience: 'Campo de texto limpio con teclado accesible. Al responder, el estudiante recibe retroalimentación formativa y comprobante de respuesta.',
     contentRequirements: 'Pregunta concreta e inequívoca con al menos una respuesta válida y sus posibles sinónimos o variantes léxicas autorizadas.',
-  },
-  {
-    id: 'subcategories',
-    icon: '⎘',
-    title: 'Categorías Anidadas',
-    subtitle: 'Taxonomía con jerarquías y subgrupos',
-    status: 'upcoming',
-    badge: 'Próximamente',
-    evaluates: 'Comprensión de relaciones de inclusión, subtipos taxonómicos o conjuntos con elementos compartidos.',
-    studentExperience: 'Organización de elementos en categorías principales y sus respectivas subcategorías jerárquicas con validación estructurada.',
-    contentRequirements: 'Árbol taxonómico de dos niveles con asignaciones precisas.',
   },
 ]
 
@@ -3771,7 +3788,91 @@ function PageIntro({ eyebrow, title, description, action }: { eyebrow: string; t
 }
 function ActivityCard({ activity, onOpen }: { activity: Activity; onOpen?: () => void }) { return <button type="button" className="activity-card" onClick={onOpen}><div className={`activity-type type-${activity.type}`}><span>{types[activity.type].icon}</span><small>{types[activity.type].label}</small></div><h3>{activity.title}</h3><p>{activity.topic}</p><div className="card-footer"><span className={`status-dot ${activity.status}`} />{activity.status === 'published' ? 'Publicada' : activity.status === 'pending' ? 'Por revisar' : 'Borrador'}<span className="card-arrow">↗</span></div></button> }
 
-function ActivityPreview({ activity, onClose, onDelete }: { activity: Activity; onClose: () => void; onDelete?: () => void }) { const reusable = activity.status === 'published'; return <div className="modal-backdrop"><div className="modal-card"><div className="modal-head"><div><p className="eyebrow">VISTA DE ACTIVIDAD</p><h2>{activity.title}</h2><p className="modal-subtitle">{types[activity.type].label} · {activity.topic}</p></div><button type="button" className="icon-button" onClick={onClose}>×</button></div><div className="admin-notice"><span>{reusable ? '✓' : '!'}</span><div><b>{reusable ? 'Lista para reutilizar' : 'Pendiente de publicación'}</b><p>{reusable ? 'Esta actividad puede seleccionarse nuevamente al crear una sala.' : 'Aprueba esta actividad desde Propuestas para incluirla en una nueva sala.'}</p></div></div><p>{activity.prompt}</p>{activity.options?.length ? <div className="activity-check-list">{activity.options.map((option, index) => <div className="activity-check" key={`${activity.id}-option-${index}`}><span className="list-type">{index + 1}</span><span><b>{option}</b></span></div>)}</div> : null}<div className="modal-actions">{onDelete && <button type="button" className="outline-button danger-button" onClick={onDelete}>Eliminar actividad</button>}<button type="button" className="primary-button" onClick={onClose}>Cerrar</button></div></div></div> }
+function ActivityPreview({
+  activity,
+  onClose,
+  onPreviewStudent,
+  onDelete,
+}: {
+  activity: Activity
+  onClose: () => void
+  onPreviewStudent?: () => void
+  onDelete?: () => void
+}) {
+  const reusable = activity.status === 'published'
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-card">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">FICHA TÉCNICA DE ACTIVIDAD</p>
+            <h2>{activity.title}</h2>
+            <p className="modal-subtitle">
+              {types[activity.type]?.label} · {activity.topic}
+            </p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar modal">
+            ×
+          </button>
+        </div>
+
+        <div className="admin-notice">
+          <span>{reusable ? '✓' : '!'}</span>
+          <div>
+            <b>{reusable ? 'Lista para evaluar y reutilizar' : 'Pendiente de publicación'}</b>
+            <p>
+              {reusable
+                ? 'Esta actividad puede seleccionarse directamente al crear o configurar una sala.'
+                : 'Aprueba esta actividad desde Propuestas para incluirla en una sala.'}
+            </p>
+          </div>
+        </div>
+
+        <div style={{ margin: '14px 0' }}>
+          <p><strong>Consigna:</strong> {activity.prompt}</p>
+          {activity.feedback && (
+            <p style={{ marginTop: '8px' }}>
+              <strong>💡 Pista orientadora para el alumno:</strong> {activity.feedback}
+            </p>
+          )}
+        </div>
+
+        {activity.options?.length ? (
+          <div className="activity-check-list">
+            {activity.options.map((option, index) => (
+              <div className="activity-check" key={`${activity.id}-option-${index}`}>
+                <span className="list-type">{index + 1}</span>
+                <span><b>{option}</b></span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="modal-actions">
+          {onPreviewStudent && (
+            <button
+              type="button"
+              className="primary-button"
+              style={{ background: '#2563eb', borderColor: '#2563eb' }}
+              onClick={onPreviewStudent}
+              title="Experimentar la actividad exactamente como la resolverá un alumno"
+            >
+              👁 Probar como alumno
+            </button>
+          )}
+          {onDelete && (
+            <button type="button" className="outline-button danger-button" onClick={onDelete}>
+              Eliminar actividad
+            </button>
+          )}
+          <button type="button" className="outline-button" onClick={onClose}>
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 type ImportPayload =
   | ContentImportDocumentV1
@@ -4581,6 +4682,11 @@ function optionsForTemplate(template: EvaluationTemplate, type: ActivityType): s
 type ActivityEditorState = {
   trueFalse: { context: string; statement: string; correct: boolean | null; explanation: string; hint: string }
   singleChoice: { context: string; options: ChoiceOption[]; hint: string; explanation: string }
+  multiSelect: { context: string; options: ChoiceOption[]; hint: string; explanation: string }
+  fillBlanks: { context: string; textWithBlanks: string; blanks: { id: string; answer: string }[]; distractors: string[]; hint: string; explanation: string }
+  spotError: { context: string; segments: { id: string; text: string; hasError: boolean }[]; correction: string; hint: string; explanation: string }
+  markWords: { context: string; text: string; hint: string; explanation: string }
+  gridCheck: { context: string; rows: GridCheckRow[]; columns: GridCheckColumn[]; expectedCells: string[]; hint: string; explanation: string }
   matching: { context: string; pairs: MatchingPair[]; hint: string; explanation: string }
   sorting: { context: string; categories: string[]; items: SortingItem[]; hint: string; explanation: string }
   ordering: { context: string; steps: string[]; hint: string; explanation: string }
@@ -4620,6 +4726,74 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
     singleChoice: {
       context: '',
       options: (concepts.length >= 2 ? concepts.map((item) => item.name) : ['', '']).slice(0, 6).map((label) => ({ id: makeEditorId('choice-'), label, correct: false })),
+      hint: '',
+      explanation: '',
+    },
+    // Selección múltiple v1.3: discriminación analítica integral con 2 o más opciones correctas.
+    multiSelect: {
+      context: '',
+      options: concepts.length >= 3
+        ? concepts.slice(0, 4).map((c, idx) => ({ id: makeEditorId('ms-'), label: c.name, correct: idx < 2 }))
+        : [
+            { id: makeEditorId('ms-'), label: 'Opción correcta 1', correct: true },
+            { id: makeEditorId('ms-'), label: 'Opción correcta 2', correct: true },
+            { id: makeEditorId('ms-'), label: 'Distractor o alternativa no aplicable', correct: false },
+          ],
+      hint: '',
+      explanation: '',
+    },
+    // Completar espacios v1.3: texto con marcadores {{1}}, {{2}} y banco cerrado de conceptos.
+    fillBlanks: {
+      context: '',
+      textWithBlanks: completeConcepts.length >= 2
+        ? `El concepto {{1}} corresponde a ${completeConcepts[0].definition}, mientras que {{2}} define ${completeConcepts[1].definition}.`
+        : 'En el proceso formativo, la {{1}} orienta la reflexión del estudiante y la {{2}} constata los aprendizajes.',
+      blanks: completeConcepts.length >= 2
+        ? [
+            { id: makeEditorId('blank-'), answer: completeConcepts[0].name },
+            { id: makeEditorId('blank-'), answer: completeConcepts[1].name },
+          ]
+        : [
+            { id: makeEditorId('blank-'), answer: 'retroalimentación' },
+            { id: makeEditorId('blank-'), answer: 'evaluación' },
+          ],
+      distractors: ['memorización', 'calificación'],
+      hint: '',
+      explanation: '',
+    },
+    // Detección del error v1.3: 3 a 6 fragmentos donde exactamente uno contiene un error conceptual.
+    spotError: {
+      context: '',
+      segments: completeConcepts.length >= 3
+        ? [
+            { id: makeEditorId('seg-'), text: `${completeConcepts[0].name}: ${completeConcepts[0].definition}`, hasError: false },
+            { id: makeEditorId('seg-'), text: `${completeConcepts[1].name} contradice completamente los principios del tema y no debe aplicarse.`, hasError: true },
+            { id: makeEditorId('seg-'), text: `${completeConcepts[2].name}: ${completeConcepts[2].definition}`, hasError: false },
+          ]
+        : [
+            { id: makeEditorId('seg-'), text: 'El agua potable es un recurso vital y limitado para el desarrollo humano.', hasError: false },
+            { id: makeEditorId('seg-'), text: 'Dejar correr el agua durante el cepillado ahorra tiempo sin desperdiciar recursos.', hasError: true },
+            { id: makeEditorId('seg-'), text: 'Cerrar el grifo disminuye de inmediato el consumo innecesario.', hasError: false },
+          ],
+      correction: 'Dejar correr el agua provoca una pérdida de varios litros de agua potable por minuto.',
+      hint: '',
+      explanation: '',
+    },
+    // Marcar palabras v1.3: párrafo continuo con términos diana [palabra*] y distractores [palabra].
+    markWords: {
+      context: '',
+      text: completeConcepts.length >= 2
+        ? `En la gestión ambiental escolar, la [${completeConcepts[0].name}*] y la [${completeConcepts[1].name}*] son acciones clave, frente al [descarte] o la [contaminación].`
+        : 'Para una gestión responsable, la [reducción*] en origen y la [reutilización*] son prácticas prioritarias frente a la [incineración] o el [desperdicio].',
+      hint: '',
+      explanation: '',
+    },
+    // Matriz de doble entrada v1.3: comparación de conceptos vs criterios.
+    gridCheck: {
+      context: '',
+      rows: (concepts.length >= 2 ? concepts.slice(0, 3) : [{ id: 'r1', name: 'Concepto A' }, { id: 'r2', name: 'Concepto B' }]).map((c, i) => ({ id: `row-${i + 1}`, label: c.name })),
+      columns: (categories.length >= 2 ? categories.slice(0, 3) : ['Criterio 1', 'Criterio 2']).map((c, i) => ({ id: `col-${i + 1}`, label: c })),
+      expectedCells: ['row-1:col-1', 'row-2:col-2'],
       hint: '',
       explanation: '',
     },
@@ -4722,6 +4896,97 @@ function activityToEditorState(activity: Activity, template?: EvaluationTemplate
       },
     }
   }
+  if (activity.type === 'multiSelect') {
+    const ms = d?.multiSelect
+    const rawAnswers = Array.isArray(activity.answer) ? activity.answer : [activity.answer]
+    const options: ChoiceOption[] = ms?.options && ms.options.length
+      ? ms.options.map((opt) => ({ id: opt.id || makeEditorId('ms-'), label: opt.label, correct: Boolean(opt.correct) }))
+      : activity.options.map((opt) => ({
+          id: makeEditorId('ms-'),
+          label: opt,
+          correct: rawAnswers.includes(opt),
+        }))
+    return {
+      ...base,
+      multiSelect: {
+        context: ms?.context || '',
+        options: options.length >= 3 ? options : base.multiSelect.options,
+        hint: ms?.hint || activity.feedback || '',
+        explanation: ms?.explanation || '',
+      },
+    }
+  }
+  if (activity.type === 'fillBlanks') {
+    const fb = d?.fillBlanks
+    const textWithBlanks = fb?.textWithBlanks || activity.prompt || base.fillBlanks.textWithBlanks
+    const blanks = fb?.blanks && fb.blanks.length ? fb.blanks : base.fillBlanks.blanks
+    const distractors = fb?.distractors && fb.distractors.length ? fb.distractors : base.fillBlanks.distractors
+    return {
+      ...base,
+      fillBlanks: {
+        context: fb?.context || '',
+        textWithBlanks,
+        blanks,
+        distractors,
+        hint: fb?.hint || activity.feedback || '',
+        explanation: fb?.explanation || '',
+      },
+    }
+  }
+  if (activity.type === 'spotError') {
+    const se = d?.spotError
+    const segments = se?.segments && se.segments.length ? se.segments : (
+      activity.options.map((opt, i) => ({ id: makeEditorId('seg-'), text: opt, hasError: opt === activity.answer || i === 1 }))
+    )
+    return {
+      ...base,
+      spotError: {
+        context: se?.context || '',
+        segments: segments.length >= 3 ? segments : base.spotError.segments,
+        correction: se?.correction || '',
+        hint: se?.hint || activity.feedback || '',
+        explanation: se?.explanation || '',
+      },
+    }
+  }
+  if (activity.type === 'markWords') {
+    const mw = d?.markWords
+    let text = mw?.text || activity.prompt || base.markWords.text
+    if (mw?.words && mw.words.length && !text.includes('[')) {
+      const wordMap = new Map(mw.words.map((w) => [w.text.toLowerCase(), w.correct]))
+      text = text.split(' ').map((token) => {
+        const clean = token.replace(/^[.,;:¡!¿?]+|[.,;:¡!¿?]+$/g, '')
+        const isMatch = wordMap.get(clean.toLowerCase())
+        if (isMatch !== undefined) {
+          return token.replace(clean, `[${clean}${isMatch ? '*' : ''}]`)
+        }
+        return token
+      }).join(' ')
+    }
+    return {
+      ...base,
+      markWords: {
+        context: mw?.context || '',
+        text,
+        hint: mw?.hint || activity.feedback || '',
+        explanation: mw?.explanation || '',
+      },
+    }
+  }
+  if (activity.type === 'gridCheck') {
+    const gc = d?.gridCheck
+    return {
+      ...base,
+      gridCheck: {
+        context: gc?.context || '',
+        rows: gc?.rows && gc.rows.length ? gc.rows : base.gridCheck.rows,
+        columns: gc?.columns && gc.columns.length ? gc.columns : base.gridCheck.columns,
+        expectedCells: gc?.expectedCells && gc.expectedCells.length ? gc.expectedCells : base.gridCheck.expectedCells,
+        hint: gc?.hint || activity.feedback || '',
+        explanation: gc?.explanation || '',
+      },
+    }
+  }
   if (activity.type === 'matching') {
     const m = d?.matching
     let pairs: MatchingPair[] = m?.pairs && m.pairs.length ? m.pairs : []
@@ -4821,6 +5086,78 @@ function validateActivityEditor(type: ActivityType, title: string, prompt: strin
   if (!prompt.trim()) return 'Escribe la consigna que verá el estudiante.'
   if (type === 'trueFalse') { const issue = validateTrueFalseDefinition(trueFalseEditorToDefinition(value.trueFalse))[0]; if (issue) return trueFalseIssueMessage(issue.path, issue.message) }
   if (type === 'singleChoice') { const issue = validateSingleChoiceDefinition(singleChoiceEditorToDefinition(prompt, value.singleChoice))[0]; if (issue) return singleChoiceIssueMessage(issue.path, issue.message) }
+  if (type === 'multiSelect') {
+    const def = {
+      type: 'multiSelect' as const,
+      id: 'editor',
+      prompt,
+      options: value.multiSelect.options,
+      hint: value.multiSelect.hint,
+      ...(value.multiSelect.context.trim() ? { context: value.multiSelect.context } : {}),
+      ...(value.multiSelect.explanation.trim() ? { explanation: value.multiSelect.explanation } : {}),
+    }
+    const issues = validateMultiSelectDefinition(def)
+    if (issues.length) return issues[0].message
+  }
+  if (type === 'fillBlanks') {
+    const def = {
+      type: 'fillBlanks' as const,
+      id: 'editor',
+      prompt,
+      textWithBlanks: value.fillBlanks.textWithBlanks,
+      blanks: value.fillBlanks.blanks,
+      distractors: value.fillBlanks.distractors,
+      hint: value.fillBlanks.hint,
+      ...(value.fillBlanks.context.trim() ? { context: value.fillBlanks.context } : {}),
+      ...(value.fillBlanks.explanation.trim() ? { explanation: value.fillBlanks.explanation } : {}),
+    }
+    const issues = validateFillBlanksDefinition(def)
+    if (issues.length) return issues[0].message
+  }
+  if (type === 'spotError') {
+    const def = {
+      type: 'spotError' as const,
+      id: 'editor',
+      prompt,
+      segments: value.spotError.segments,
+      hint: value.spotError.hint,
+      ...(value.spotError.correction.trim() ? { correction: value.spotError.correction } : {}),
+      ...(value.spotError.context.trim() ? { context: value.spotError.context } : {}),
+      ...(value.spotError.explanation.trim() ? { explanation: value.spotError.explanation } : {}),
+    }
+    const issues = validateSpotErrorDefinition(def)
+    if (issues.length) return issues[0].message
+  }
+  if (type === 'markWords') {
+    const parsed = parseMarkWordsText(value.markWords.text)
+    const def = {
+      type: 'markWords' as const,
+      id: 'editor',
+      prompt,
+      text: value.markWords.text,
+      words: parsed.tokens,
+      hint: value.markWords.hint,
+      ...(value.markWords.context.trim() ? { context: value.markWords.context } : {}),
+      ...(value.markWords.explanation.trim() ? { explanation: value.markWords.explanation } : {}),
+    }
+    const issues = validateMarkWordsDefinition(def)
+    if (issues.length) return issues[0].message
+  }
+  if (type === 'gridCheck') {
+    const def = {
+      type: 'gridCheck' as const,
+      id: 'editor',
+      prompt,
+      rows: value.gridCheck.rows,
+      columns: value.gridCheck.columns,
+      expectedCells: value.gridCheck.expectedCells,
+      hint: value.gridCheck.hint,
+      ...(value.gridCheck.context.trim() ? { context: value.gridCheck.context } : {}),
+      ...(value.gridCheck.explanation.trim() ? { explanation: value.gridCheck.explanation } : {}),
+    }
+    const result = validateGridCheckActivity(def)
+    if (!result.valid && result.issues.length) return result.issues[0].message
+  }
   if (type === 'matching') { const issue = validateMatchingDefinition(matchingEditorToDefinition(prompt, value.matching))[0]; if (issue) return matchingIssueMessage(issue.path, issue.message) }
   if (type === 'sorting') { const issue = validateSortingDefinition(sortingEditorToDefinition(prompt, value.sorting))[0]; if (issue) return sortingIssueMessage(issue.path, issue.message) }
   if (type === 'ordering') { const issue = validateOrderingDefinition(orderingEditorToDefinition(prompt, value.ordering))[0]; if (issue) return orderingIssueMessage(issue.path, issue.message) }
@@ -4847,6 +5184,144 @@ function editorStateToActivity(type: ActivityType, value: ActivityEditorState, c
     const options = cleanOptions.map((option) => option.label)
     const correct = cleanOptions.find((option) => option.correct)?.label ?? ''
     return { id: '', templateId: common.templateId, title: common.title, type, topic: common.topic, difficulty: common.difficulty, prompt: common.prompt, options, answer: correct, feedback: sc.hint.trim(), details: { singleChoice: { options: cleanOptions, context: sc.context.trim() || undefined, hint: sc.hint.trim(), explanation: sc.explanation.trim() || undefined } }, status: 'published' }
+  }
+  if (type === 'multiSelect') {
+    const ms = value.multiSelect
+    const cleanOptions = ms.options.map((option) => ({ id: option.id, label: option.label.trim(), correct: option.correct }))
+    const options = cleanOptions.map((option) => option.label)
+    const correctAnswers = cleanOptions.filter((option) => option.correct).map((option) => option.label)
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options,
+      answer: correctAnswers,
+      feedback: ms.hint.trim(),
+      details: {
+        multiSelect: {
+          options: cleanOptions,
+          context: ms.context.trim() || undefined,
+          hint: ms.hint.trim(),
+          explanation: ms.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'fillBlanks') {
+    const fb = value.fillBlanks
+    const cleanBlanks = fb.blanks.map((b) => ({ id: b.id, answer: b.answer.trim() }))
+    const cleanDistractors = fb.distractors.map((d) => d.trim()).filter(Boolean)
+    const bank = [...cleanBlanks.map((b) => b.answer), ...cleanDistractors]
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options: bank,
+      answer: cleanBlanks.map((b) => b.answer),
+      feedback: fb.hint.trim(),
+      details: {
+        fillBlanks: {
+          textWithBlanks: fb.textWithBlanks.trim(),
+          blanks: cleanBlanks,
+          distractors: cleanDistractors,
+          context: fb.context.trim() || undefined,
+          hint: fb.hint.trim(),
+          explanation: fb.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'spotError') {
+    const se = value.spotError
+    const cleanSegments = se.segments.map((s) => ({ id: s.id, text: s.text.trim(), hasError: s.hasError }))
+    const errSegment = cleanSegments.find((s) => s.hasError)
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options: cleanSegments.map((s) => s.text),
+      answer: errSegment?.text ?? cleanSegments[0]?.text ?? '',
+      feedback: se.hint.trim(),
+      details: {
+        spotError: {
+          segments: cleanSegments,
+          correction: se.correction.trim() || undefined,
+          context: se.context.trim() || undefined,
+          hint: se.hint.trim(),
+          explanation: se.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'markWords') {
+    const mw = value.markWords
+    const parsed = parseMarkWordsText(mw.text)
+    const correctWords = parsed.tokens.filter((t) => t.correct).map((t) => t.text)
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options: parsed.tokens.map((t) => t.text),
+      answer: correctWords,
+      feedback: mw.hint.trim(),
+      details: {
+        markWords: {
+          text: mw.text.trim(),
+          words: parsed.tokens,
+          context: mw.context.trim() || undefined,
+          hint: mw.hint.trim(),
+          explanation: mw.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'gridCheck') {
+    const gc = value.gridCheck
+    const cleanRows = gc.rows.map((r) => ({ id: r.id, label: r.label.trim() }))
+    const cleanCols = gc.columns.map((c) => ({ id: c.id, label: c.label.trim() }))
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options: cleanRows.map((r) => r.label),
+      answer: gc.expectedCells,
+      feedback: gc.hint.trim(),
+      details: {
+        gridCheck: {
+          rows: cleanRows,
+          columns: cleanCols,
+          expectedCells: gc.expectedCells,
+          context: gc.context.trim() || undefined,
+          hint: gc.hint.trim(),
+          explanation: gc.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
   }
   if (type === 'matching') {
     const m = value.matching
@@ -5772,12 +6247,770 @@ function ShortAnswerEditor({
 function SpecificActivityEditor({ type, value, onChange }: { type: ActivityType; value: ActivityEditorState; onChange: (value: ActivityEditorState) => void }) {
   if (type === 'trueFalse') return <TrueFalseEditor value={value.trueFalse} onChange={(trueFalse) => onChange({ ...value, trueFalse })} />
   if (type === 'singleChoice') return <SingleChoiceEditor value={value.singleChoice} onChange={(singleChoice) => onChange({ ...value, singleChoice })} />
+  if (type === 'multiSelect') return <MultiSelectEditor value={value.multiSelect} onChange={(multiSelect) => onChange({ ...value, multiSelect })} />
+  if (type === 'fillBlanks') return <FillBlanksEditor value={value.fillBlanks} onChange={(fillBlanks) => onChange({ ...value, fillBlanks })} />
+  if (type === 'spotError') return <SpotErrorEditor value={value.spotError} onChange={(spotError) => onChange({ ...value, spotError })} />
+  if (type === 'markWords') return <MarkWordsEditor value={value.markWords} onChange={(markWords) => onChange({ ...value, markWords })} />
+  if (type === 'gridCheck') return <GridCheckEditor value={value.gridCheck} onChange={(gridCheck) => onChange({ ...value, gridCheck })} />
   if (type === 'matching') return <MatchingEditor value={value.matching} onChange={(matching) => onChange({ ...value, matching })} />
   if (type === 'sorting') return <SortingEditor value={value.sorting} onChange={(sorting) => onChange({ ...value, sorting })} />
   if (type === 'ordering') return <OrderingEditor value={value.ordering} onChange={(ordering) => onChange({ ...value, ordering })} />
   if (type === 'vennDiagram') return <VennDiagramEditor value={value.vennDiagram} onChange={(vennDiagram) => onChange({ ...value, vennDiagram })} />
   if (type === 'shortAnswer') return <ShortAnswerEditor value={value.shortAnswer} onChange={(shortAnswer) => onChange({ ...value, shortAnswer })} />
   return <ScenarioEditor value={value.scenario} onChange={(scenario) => onChange({ ...value, scenario })} />
+}
+
+function MultiSelectEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['multiSelect']
+  onChange: (value: ActivityEditorState['multiSelect']) => void
+}) {
+  const updateOption = (id: string, patch: Partial<ChoiceOption>) =>
+    onChange({
+      ...value,
+      options: value.options.map((opt) => (opt.id === id ? { ...opt, ...patch } : opt)),
+    })
+
+  const addOption = () => {
+    if (value.options.length >= MULTI_SELECT_LIMITS.maxOptions) return
+    onChange({
+      ...value,
+      options: [
+        ...value.options,
+        { id: makeEditorId('ms-'), label: '', correct: false },
+      ],
+    })
+  }
+
+  const removeOption = (id: string) => {
+    if (value.options.length <= MULTI_SELECT_LIMITS.minOptions) return
+    onChange({
+      ...value,
+      options: value.options.filter((opt) => opt.id !== id),
+    })
+  }
+
+  const correctCount = value.options.filter((opt) => opt.correct).length
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE SELECCIÓN MÚLTIPLE</p>
+          <b>Múltiples opciones correctas y distractores</b>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addOption}
+          disabled={value.options.length >= MULTI_SELECT_LIMITS.maxOptions}
+        >
+          ＋ Agregar opción
+        </button>
+      </div>
+
+      <label>
+        Contexto o situación del caso (opcional)
+        <textarea
+          rows={2}
+          maxLength={MULTI_SELECT_LIMITS.context}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Marco contextual o caso previo que el estudiante debe analizar antes de responder."
+        />
+      </label>
+
+      <div className="editor-help" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+        <span>Define entre 3 y 6 opciones. Marca al menos dos como correctas y deja al menos un distractor.</span>
+        <span className={`badge-pill ${correctCount >= MULTI_SELECT_LIMITS.minCorrect ? 'badge-ok' : 'badge-warn'}`}>
+          {correctCount} de {value.options.length} correctas
+        </span>
+      </div>
+
+      <div className="editor-options">
+        {value.options.map((option, index) => (
+          <div className="editor-option choice-editor" key={option.id}>
+            <div className="editor-card-head">
+              <b>Opción {index + 1}</b>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => removeOption(option.id)}
+                disabled={value.options.length <= MULTI_SELECT_LIMITS.minOptions}
+                aria-label="Eliminar opción"
+              >
+                ×
+              </button>
+            </div>
+            <div className="choice-line">
+              <input
+                maxLength={MULTI_SELECT_LIMITS.optionLabel}
+                value={option.label}
+                onChange={(e) => updateOption(option.id, { label: e.target.value })}
+                placeholder={`Texto de la opción ${index + 1}`}
+              />
+              <label className="checkbox-row" style={{ minWidth: '110px' }}>
+                <input
+                  type="checkbox"
+                  checked={option.correct}
+                  onChange={(e) => updateOption(option.id, { correct: e.target.checked })}
+                />
+                <b>{option.correct ? '✓ Correcta' : 'Distractor'}</b>
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={MULTI_SELECT_LIMITS.hint}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista pedagógica que induce a la reflexión sin decir cuántas ni cuáles son correctas."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={MULTI_SELECT_LIMITS.explanation}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Fundamentación de las opciones correctas y análisis de distractores. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
+function FillBlanksEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['fillBlanks']
+  onChange: (value: ActivityEditorState['fillBlanks']) => void
+}) {
+  const updateBlankAnswer = (index: number, answer: string) => {
+    const next = [...value.blanks]
+    if (next[index]) next[index] = { ...next[index], answer }
+    onChange({ ...value, blanks: next })
+  }
+
+  const addDistractor = () => {
+    if (value.distractors.length >= FILL_BLANKS_LIMITS.maxDistractors) return
+    onChange({ ...value, distractors: [...value.distractors, ''] })
+  }
+
+  const updateDistractor = (index: number, text: string) => {
+    const next = [...value.distractors]
+    next[index] = text
+    onChange({ ...value, distractors: next })
+  }
+
+  const removeDistractor = (index: number) => {
+    if (value.distractors.length <= FILL_BLANKS_LIMITS.minDistractors) return
+    onChange({ ...value, distractors: value.distractors.filter((_, i) => i !== index) })
+  }
+
+  const syncBlanksFromText = () => {
+    const matches = Array.from(value.textWithBlanks.matchAll(/\{\{(\d+)\}\}/g))
+    const uniqueIds = Array.from(new Set(matches.map((m) => m[1])))
+    if (uniqueIds.length === 0) return
+    const currentMap = new Map(value.blanks.map((b, i) => [String(i + 1), b.answer]))
+    const newBlanks = uniqueIds.slice(0, FILL_BLANKS_LIMITS.maxBlanks).map((id) => ({
+      id: makeEditorId('blank-'),
+      answer: currentMap.get(id) || '',
+    }))
+    onChange({ ...value, blanks: newBlanks })
+  }
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE COMPLETAR ESPACIOS</p>
+          <b>Texto con marcadores y banco de fichas</b>
+        </div>
+      </div>
+
+      <label>
+        Contexto del enunciado o situación (opcional)
+        <textarea
+          rows={2}
+          maxLength={FILL_BLANKS_LIMITS.context}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Marco explicativo o instrucciones contextuales."
+        />
+      </label>
+
+      <label>
+        Párrafo con marcadores de huecos *
+        <textarea
+          rows={3}
+          maxLength={FILL_BLANKS_LIMITS.textWithBlanks}
+          value={value.textWithBlanks}
+          onChange={(e) => onChange({ ...value, textWithBlanks: e.target.value })}
+          placeholder="Escribe el texto usando {{1}}, {{2}}... donde quieras ubicar los espacios. Ej: La {{1}} disminuye residuos y la {{2}} alarga la vida útil."
+        />
+      </label>
+      <div style={{ marginBottom: '12px' }}>
+        <button type="button" className="outline-button btn-small" onClick={syncBlanksFromText}>
+          🔄 Sincronizar ranuras con el texto
+        </button>
+      </div>
+
+      <div className="editor-heading">
+        <div>
+          <b>Respuestas correctas para cada ranura</b>
+          <p className="editor-help" style={{ margin: 0 }}>Cada hueco numerado debe tener su término exacto correspondiente.</p>
+        </div>
+      </div>
+
+      <div className="editor-options">
+        {value.blanks.map((blank, index) => (
+          <div className="editor-option choice-editor" key={blank.id || index}>
+            <div className="editor-card-head">
+              <b>Ranura {`{{${index + 1}}}`} *</b>
+            </div>
+            <input
+              maxLength={FILL_BLANKS_LIMITS.wordLabel}
+              value={blank.answer}
+              onChange={(e) => updateBlankAnswer(index, e.target.value)}
+              placeholder={`Término exacto para el espacio {{${index + 1}}}`}
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="editor-heading" style={{ marginTop: '16px' }}>
+        <div>
+          <b>Palabras distractoras adicionales</b>
+          <p className="editor-help" style={{ margin: 0 }}>Se mezclan en el banco de fichas del alumno (mínimo 1, máximo 6).</p>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addDistractor}
+          disabled={value.distractors.length >= FILL_BLANKS_LIMITS.maxDistractors}
+        >
+          ＋ Agregar distractor
+        </button>
+      </div>
+
+      <div className="editor-options">
+        {value.distractors.map((dist, index) => (
+          <div className="editor-option choice-editor" key={index}>
+            <div className="editor-card-head">
+              <b>Distractor {index + 1} *</b>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => removeDistractor(index)}
+                disabled={value.distractors.length <= FILL_BLANKS_LIMITS.minDistractors}
+                aria-label="Eliminar distractor"
+              >
+                ×
+              </button>
+            </div>
+            <input
+              maxLength={FILL_BLANKS_LIMITS.wordLabel}
+              value={dist}
+              onChange={(e) => updateDistractor(index, e.target.value)}
+              placeholder={`Palabra o término distractor #${index + 1}`}
+            />
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={FILL_BLANKS_LIMITS.hint}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista formativa que induce a la reflexión sin decir cuál ficha va en cada hueco."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={FILL_BLANKS_LIMITS.explanation}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Fundamentación de las respuestas. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
+function SpotErrorEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['spotError']
+  onChange: (value: ActivityEditorState['spotError']) => void
+}) {
+  const updateSegment = (id: string, patch: Partial<ActivityEditorState['spotError']['segments'][0]>) =>
+    onChange({
+      ...value,
+      segments: value.segments.map((seg) => (seg.id === id ? { ...seg, ...patch } : seg)),
+    })
+
+  const setHasError = (id: string) => {
+    onChange({
+      ...value,
+      segments: value.segments.map((seg) => ({ ...seg, hasError: seg.id === id })),
+    })
+  }
+
+  const addSegment = () => {
+    if (value.segments.length >= SPOT_ERROR_LIMITS.maxSegments) return
+    onChange({
+      ...value,
+      segments: [
+        ...value.segments,
+        { id: makeEditorId('seg-'), text: '', hasError: false },
+      ],
+    })
+  }
+
+  const removeSegment = (id: string) => {
+    if (value.segments.length <= SPOT_ERROR_LIMITS.minSegments) return
+    const next = value.segments.filter((seg) => seg.id !== id)
+    if (!next.some((seg) => seg.hasError) && next.length > 0) {
+      next[0].hasError = true
+    }
+    onChange({ ...value, segments: next })
+  }
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE DETECCIÓN DEL ERROR</p>
+          <b>Fragmentos analíticos donde exactamente uno contiene el error</b>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addSegment}
+          disabled={value.segments.length >= SPOT_ERROR_LIMITS.maxSegments}
+        >
+          ＋ Agregar fragmento
+        </button>
+      </div>
+
+      <label>
+        Contexto o presentación del caso (opcional)
+        <textarea
+          rows={2}
+          maxLength={SPOT_ERROR_LIMITS.context}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Marco de referencia o procedimiento a auditar."
+        />
+      </label>
+
+      <p className="editor-help">
+        Configura entre 3 y 6 fragmentos. Marca con el botón de radio exactamente aquel que contiene el error conceptual o procedimental.
+      </p>
+
+      <div className="editor-options">
+        {value.segments.map((seg, index) => (
+          <div className={`editor-option choice-editor ${seg.hasError ? 'chosen' : ''}`} key={seg.id}>
+            <div className="editor-card-head">
+              <b>Fragmento {String.fromCharCode(65 + index)}</b>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => removeSegment(seg.id)}
+                disabled={value.segments.length <= SPOT_ERROR_LIMITS.minSegments}
+                aria-label="Eliminar fragmento"
+              >
+                ×
+              </button>
+            </div>
+            <div className="choice-line">
+              <input
+                maxLength={SPOT_ERROR_LIMITS.segmentText}
+                value={seg.text}
+                onChange={(e) => updateSegment(seg.id, { text: e.target.value })}
+                placeholder={`Enunciado del fragmento ${String.fromCharCode(65 + index)}`}
+              />
+              <label className="radio-row" style={{ minWidth: '135px' }}>
+                <input
+                  type="radio"
+                  name="spot-error-target"
+                  checked={seg.hasError}
+                  onChange={() => setHasError(seg.id)}
+                />
+                <b style={{ color: seg.hasError ? '#b45309' : 'inherit' }}>
+                  {seg.hasError ? '⚡ Tiene el error' : 'Es correcto'}
+                </b>
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Corrección pedagógica del error (opcional)
+        <textarea
+          rows={2}
+          maxLength={SPOT_ERROR_LIMITS.correction}
+          value={value.correction}
+          onChange={(e) => onChange({ ...value, correction: e.target.value })}
+          placeholder="Explica cómo debería redactarse correctamente el enunciado erróneo."
+        />
+      </label>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={SPOT_ERROR_LIMITS.hint}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista pedagógica que induce a la revisión reflexiva sin decir directamente cuál fragmento es el erróneo."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={SPOT_ERROR_LIMITS.explanation}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Fundamentación académica del error. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
+function MarkWordsEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['markWords']
+  onChange: (value: ActivityEditorState['markWords']) => void
+}) {
+  const parsed = parseMarkWordsText(value.text)
+  const correctTokens = parsed.tokens.filter((t) => t.correct)
+  const distractorTokens = parsed.tokens.filter((t) => !t.correct)
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE MARCAR PALABRAS EN EL TEXTO</p>
+          <b>Párrafo interactivo con términos resaltables con un toque</b>
+        </div>
+      </div>
+
+      <label>
+        Contexto o marco conceptual (opcional)
+        <textarea
+          rows={2}
+          maxLength={MARK_WORDS_LIMITS.context}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Marco de referencia o instrucciones específicas para la lectura."
+        />
+      </label>
+
+      <label>
+        Texto del párrafo con marcas de términos [palabra*] o [palabra] *
+        <textarea
+          rows={4}
+          maxLength={MARK_WORDS_LIMITS.text}
+          value={value.text}
+          onChange={(e) => onChange({ ...value, text: e.target.value })}
+          placeholder="Encierra entre corchetes los términos interactivos: agrega asterisco para respuestas correctas [término*] y sin asterisco para distractores [término]."
+        />
+      </label>
+
+      <div className="admin-notice" style={{ margin: '8px 0 16px' }}>
+        <span>ℹ</span>
+        <div>
+          <b>Sintaxis amigable:</b>
+          <p>
+            Usa <code>[palabra*]</code> para palabras clave que el alumno debe marcar y <code>[palabra]</code> para términos distractores que no debe marcar.
+          </p>
+        </div>
+      </div>
+
+      <div className="venn-editor-balance-bar">
+        <b>Términos interactivos detectados:</b>
+        <span className={`badge-pill ${correctTokens.length >= MARK_WORDS_LIMITS.minCorrect ? 'badge-ok' : 'badge-warn'}`}>
+          ✓ Correctas a marcar: {correctTokens.length} ({correctTokens.map((t) => t.text).join(', ') || 'ninguna'})
+        </span>
+        <span className={`badge-pill ${distractorTokens.length >= MARK_WORDS_LIMITS.minDistractors ? 'badge-ok' : 'badge-warn'}`}>
+          ○ Distractores: {distractorTokens.length} ({distractorTokens.map((t) => t.text).join(', ') || 'ninguno'})
+        </span>
+      </div>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={MARK_WORDS_LIMITS.hint}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista orientadora que estimula la relectura crítica sin delatar qué términos debían resaltarse."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={MARK_WORDS_LIMITS.explanation}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Justificación conceptual de las palabras diana. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
+function GridCheckEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['gridCheck']
+  onChange: (value: ActivityEditorState['gridCheck']) => void
+}) {
+  const updateRow = (index: number, label: string) => {
+    const next = [...value.rows]
+    next[index] = { ...next[index], label }
+    onChange({ ...value, rows: next })
+  }
+
+  const addRow = () => {
+    if (value.rows.length >= GRID_CHECK_LIMITS.maxRows) return
+    const id = `row-${value.rows.length + 1}`
+    onChange({ ...value, rows: [...value.rows, { id, label: `Fila ${value.rows.length + 1}` }] })
+  }
+
+  const removeRow = (index: number) => {
+    if (value.rows.length <= GRID_CHECK_LIMITS.minRows) return
+    const removedId = value.rows[index].id
+    const nextRows = value.rows.filter((_, i) => i !== index)
+    const nextExpected = value.expectedCells.filter((c) => !c.startsWith(`${removedId}:`))
+    onChange({ ...value, rows: nextRows, expectedCells: nextExpected })
+  }
+
+  const updateColumn = (index: number, label: string) => {
+    const next = [...value.columns]
+    next[index] = { ...next[index], label }
+    onChange({ ...value, columns: next })
+  }
+
+  const addColumn = () => {
+    if (value.columns.length >= GRID_CHECK_LIMITS.maxColumns) return
+    const id = `col-${value.columns.length + 1}`
+    onChange({ ...value, columns: [...value.columns, { id, label: `Criterio ${value.columns.length + 1}` }] })
+  }
+
+  const removeColumn = (index: number) => {
+    if (value.columns.length <= GRID_CHECK_LIMITS.minColumns) return
+    const removedId = value.columns[index].id
+    const nextCols = value.columns.filter((_, i) => i !== index)
+    const nextExpected = value.expectedCells.filter((c) => !c.endsWith(`:${removedId}`))
+    onChange({ ...value, columns: nextCols, expectedCells: nextExpected })
+  }
+
+  const toggleCell = (rowId: string, colId: string) => {
+    const cellKey = `${rowId}:${colId}`
+    const exists = value.expectedCells.includes(cellKey)
+    const nextExpected = exists
+      ? value.expectedCells.filter((c) => c !== cellKey)
+      : [...value.expectedCells, cellKey]
+    onChange({ ...value, expectedCells: nextExpected })
+  }
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE MATRIZ DE DOBLE ENTRADA</p>
+          <b>Cruce multidimensional de conceptos (filas) vs criterios (columnas)</b>
+        </div>
+      </div>
+
+      <label>
+        Contexto o instrucción previa (opcional)
+        <textarea
+          rows={2}
+          maxLength={GRID_CHECK_LIMITS.context}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Marco explicativo de la tabla comparativa."
+        />
+      </label>
+
+      {/* Filas */}
+      <div className="editor-heading" style={{ marginTop: '12px' }}>
+        <div>
+          <b>Filas (Conceptos o Casos a comparar)</b>
+          <p className="editor-help" style={{ margin: 0 }}>Entre 2 y 6 filas.</p>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addRow}
+          disabled={value.rows.length >= GRID_CHECK_LIMITS.maxRows}
+        >
+          ＋ Agregar fila
+        </button>
+      </div>
+
+      <div className="editor-options">
+        {value.rows.map((row, index) => (
+          <div className="repeatable-row" key={row.id}>
+            <span className="step-number">{index + 1}</span>
+            <input
+              maxLength={GRID_CHECK_LIMITS.rowLabel}
+              value={row.label}
+              onChange={(e) => updateRow(index, e.target.value)}
+              placeholder={`Etiqueta de la fila ${index + 1}`}
+            />
+            <button
+              type="button"
+              className="remove-button"
+              onClick={() => removeRow(index)}
+              disabled={value.rows.length <= GRID_CHECK_LIMITS.minRows}
+              aria-label="Eliminar fila"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Columnas */}
+      <div className="editor-heading" style={{ marginTop: '16px' }}>
+        <div>
+          <b>Columnas (Criterios, Propiedades o Características)</b>
+          <p className="editor-help" style={{ margin: 0 }}>Entre 2 y 5 columnas.</p>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addColumn}
+          disabled={value.columns.length >= GRID_CHECK_LIMITS.maxColumns}
+        >
+          ＋ Agregar columna
+        </button>
+      </div>
+
+      <div className="editor-options">
+        {value.columns.map((col, index) => (
+          <div className="repeatable-row" key={col.id}>
+            <span className="step-number">{String.fromCharCode(65 + index)}</span>
+            <input
+              maxLength={GRID_CHECK_LIMITS.columnLabel}
+              value={col.label}
+              onChange={(e) => updateColumn(index, e.target.value)}
+              placeholder={`Etiqueta de la columna ${index + 1}`}
+            />
+            <button
+              type="button"
+              className="remove-button"
+              onClick={() => removeColumn(index)}
+              disabled={value.columns.length <= GRID_CHECK_LIMITS.minColumns}
+              aria-label="Eliminar columna"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Matriz interactiva de cotejo */}
+      <div className="editor-heading" style={{ marginTop: '16px' }}>
+        <div>
+          <b>Solución de la matriz: haz clic en las celdas correctas que deben estar marcadas *</b>
+        </div>
+      </div>
+
+      <div className="grid-check-desktop-view" style={{ marginTop: '8px' }}>
+        <table className="grid-check-table">
+          <thead>
+            <tr>
+              <th className="grid-check-th-corner">Concepto / Propiedad</th>
+              {value.columns.map((col) => (
+                <th key={col.id} className="grid-check-th-col">
+                  {col.label || '(Sin nombre)'}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {value.rows.map((row) => (
+              <tr key={row.id}>
+                <td className="grid-check-td-row">
+                  <b>{row.label || '(Sin nombre)'}</b>
+                </td>
+                {value.columns.map((col) => {
+                  const key = `${row.id}:${col.id}`
+                  const isChecked = value.expectedCells.includes(key)
+                  return (
+                    <td key={col.id} className="grid-check-td-cell">
+                      <button
+                        type="button"
+                        className={`grid-check-cell-btn ${isChecked ? 'checked' : ''}`}
+                        onClick={() => toggleCell(row.id, col.id)}
+                        title={`Marcar o desmarcar ${row.label} - ${col.label}`}
+                      >
+                        <span className="grid-check-cell-icon">{isChecked ? '✓' : ''}</span>
+                      </button>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <label style={{ marginTop: '16px' }}>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={GRID_CHECK_LIMITS.hint}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista formativa que induce a contrastar propiedades sin decir qué casillas son las correctas."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={GRID_CHECK_LIMITS.explanation}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Fundamentación de los cruces de la matriz. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
 }
 
 function ActivityForm({ initialType, template, initialActivity, onCancel, onSave }: { initialType: ActivityType; template?: EvaluationTemplate; initialActivity?: Activity; onCancel: () => void; onSave: (activity: Activity) => void }) {
@@ -5831,6 +7064,7 @@ function VariantDrilldownModal({
   onDeselectAll,
   onReviewSingle,
   onEditActivity,
+  onPreviewStudent,
   onClose,
 }: {
   type: ActivityType
@@ -5841,6 +7075,7 @@ function VariantDrilldownModal({
   onDeselectAll: () => void
   onReviewSingle: (id: string, status: 'published' | 'draft') => void
   onEditActivity: (activity: Activity) => void
+  onPreviewStudent?: (act: Activity) => void
   onClose: () => void
 }) {
   const typeMeta = types[type]
@@ -5995,6 +7230,16 @@ function VariantDrilldownModal({
                 </div>
 
                 <div className="variant-item-actions">
+                  {onPreviewStudent && (
+                    <button
+                      type="button"
+                      className="outline-button btn-small preview-student-btn"
+                      onClick={() => onPreviewStudent(activity)}
+                      title="Probar esta variante interactiva como si fueras un alumno"
+                    >
+                      👁 Probar
+                    </button>
+                  )}
                   {!hasRepair && (
                     <button
                       type="button"
@@ -6043,6 +7288,7 @@ function ProposalsView({
   onReviewBatch,
   onEditActivity,
   onCreateRoomFromProposals,
+  onPreviewStudent,
   onContinueDraft,
   onHome,
 }: {
@@ -6052,6 +7298,7 @@ function ProposalsView({
   onReviewBatch: (ids: string[], status: 'published' | 'draft') => void
   onEditActivity: (activity: Activity) => void
   onCreateRoomFromProposals: (activityIds: string[]) => void
+  onPreviewStudent?: (act: Activity) => void
   onContinueDraft: () => void
   onHome: () => void
 }) {
@@ -6247,6 +7494,7 @@ function ProposalsView({
             setSelectedTypeModal(null)
             onEditActivity(act)
           }}
+          onPreviewStudent={onPreviewStudent}
           onClose={() => setSelectedTypeModal(null)}
         />
       )}
@@ -8858,7 +10106,16 @@ function PlayView({
 
       <div className="play-top">
         <span>ACTIVIDAD {index + 1} DE {totalCount}</span>
-        <span>{secondsLeft === null ? 'Sin límite de tiempo' : 'Tiempo restante ' + formatSeconds(secondsLeft)}</span>
+        {(() => {
+          const isTimerDanger = secondsLeft !== null && secondsLeft <= 60
+          const isTimerWarning = secondsLeft !== null && secondsLeft <= 300 && !isTimerDanger
+          const timerClass = isTimerDanger ? 'timer-danger' : isTimerWarning ? 'timer-warning' : ''
+          return (
+            <span className={`play-timer ${timerClass}`}>
+              {secondsLeft === null ? 'Sin límite de tiempo' : '⏱ ' + formatSeconds(secondsLeft)}
+            </span>
+          )
+        })()}
       </div>
 
       <div className="play-card">
@@ -8871,12 +10128,26 @@ function PlayView({
           <p className="editor-help">{runtime.trueFalse.context}</p>
         ) : item.type === 'singleChoice' && runtime.singleChoice.context ? (
           <p className="editor-help">{runtime.singleChoice.context}</p>
+        ) : item.type === 'multiSelect' && runtime.multiSelect.context ? (
+          <p className="editor-help">{runtime.multiSelect.context}</p>
+        ) : item.type === 'fillBlanks' && runtime.fillBlanks.context ? (
+          <p className="editor-help">{runtime.fillBlanks.context}</p>
+        ) : item.type === 'spotError' && runtime.spotError.context ? (
+          <p className="editor-help">{runtime.spotError.context}</p>
+        ) : item.type === 'markWords' && runtime.markWords.context ? (
+          <p className="editor-help">{runtime.markWords.context}</p>
+        ) : item.type === 'gridCheck' && runtime.gridCheck.context ? (
+          <p className="editor-help">{runtime.gridCheck.context}</p>
         ) : item.type === 'matching' && runtime.matching.context ? (
           <p className="editor-help">{runtime.matching.context}</p>
         ) : item.type === 'sorting' && runtime.sorting.context ? (
           <p className="editor-help">{runtime.sorting.context}</p>
         ) : item.type === 'ordering' && runtime.ordering.context ? (
           <p className="editor-help">{runtime.ordering.context}</p>
+        ) : item.type === 'vennDiagram' && runtime.vennDiagram.context ? (
+          <p className="editor-help">{runtime.vennDiagram.context}</p>
+        ) : item.type === 'shortAnswer' && runtime.shortAnswer.context ? (
+          <p className="editor-help">{runtime.shortAnswer.context}</p>
         ) : null}
 
         <p className="play-prompt">
@@ -8890,6 +10161,41 @@ function PlayView({
               response={draftResponse}
               disabled={submitted}
               onChange={(choices) => setDraftResponse({ type: 'scenario', choices })}
+            />
+          ) : item.type === 'multiSelect' && draftResponse.type === 'multiSelect' ? (
+            <MultiSelectQuestion
+              runtime={runtime.multiSelect}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(values) => setDraftResponse({ type: 'multiSelect', values })}
+            />
+          ) : item.type === 'fillBlanks' && draftResponse.type === 'fillBlanks' ? (
+            <FillBlanksQuestion
+              runtime={runtime.fillBlanks}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(answers) => setDraftResponse({ type: 'fillBlanks', answers })}
+            />
+          ) : item.type === 'spotError' && draftResponse.type === 'spotError' ? (
+            <SpotErrorQuestion
+              runtime={runtime.spotError}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(value) => setDraftResponse({ type: 'spotError', value })}
+            />
+          ) : item.type === 'markWords' && draftResponse.type === 'markWords' ? (
+            <MarkWordsQuestion
+              runtime={runtime.markWords}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(values) => setDraftResponse({ type: 'markWords', values })}
+            />
+          ) : item.type === 'gridCheck' && draftResponse.type === 'gridCheck' ? (
+            <GridCheckQuestion
+              runtime={runtime.gridCheck}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(values) => setDraftResponse({ type: 'gridCheck', values })}
             />
           ) : item.type === 'matching' && draftResponse.type === 'matching' ? (
             <MatchingQuestion
@@ -8963,6 +10269,16 @@ function PlayView({
                 <p>{runtime.trueFalse.hint ?? item.feedback}</p>
               ) : item.type === 'singleChoice' ? (
                 <p>{runtime.singleChoice.hint ?? item.feedback}</p>
+              ) : item.type === 'multiSelect' ? (
+                <p>{runtime.multiSelect.hint ?? item.feedback}</p>
+              ) : item.type === 'fillBlanks' ? (
+                <p>{runtime.fillBlanks.hint ?? item.feedback}</p>
+              ) : item.type === 'spotError' ? (
+                <p>{runtime.spotError.hint ?? item.feedback}</p>
+              ) : item.type === 'markWords' ? (
+                <p>{runtime.markWords.hint ?? item.feedback}</p>
+              ) : item.type === 'gridCheck' ? (
+                <p>{runtime.gridCheck.hint ?? item.feedback}</p>
               ) : item.type === 'matching' ? (
                 <p>{runtime.matching.hint ?? item.feedback}</p>
               ) : item.type === 'sorting' ? (
@@ -9007,45 +10323,503 @@ function PlayView({
         </div>
       </div>
 
-      {/* 3.5 Diálogo de confirmación previa al finalizar si quedan preguntas pendientes */}
-      {showConfirmModal && (
-        <div className="modal-backdrop">
-          <div className="modal-card finish-confirm-modal">
-            <div className="modal-head">
-              <div>
-                <p className="eyebrow">FINALIZAR EVALUACIÓN</p>
-                <h2>¿Entregar ahora tus respuestas?</h2>
-                <p className="modal-subtitle">
-                  Has respondido <b>{answeredCount} de {totalCount}</b> actividades.
-                  {totalCount - answeredCount > 0 ? (
-                    ` Quedan ${totalCount - answeredCount} pregunta${totalCount - answeredCount === 1 ? '' : 's'} sin responder o pendientes.`
-                  ) : (
-                    ' Has completado todas las preguntas de la evaluación.'
-                  )}
-                </p>
+      {/* 3.5 Diálogo de confirmación previa al finalizar con lista de preguntas pendientes */}
+      {showConfirmModal && (() => {
+        const pendingIndices: number[] = []
+        for (let i = 0; i < totalCount; i++) {
+          if (!responsesRecorded || !responsesRecorded[i]) {
+            pendingIndices.push(i)
+          }
+        }
+        return (
+          <div className="modal-backdrop">
+            <div className="modal-card finish-confirm-modal">
+              <div className="modal-head">
+                <div>
+                  <p className="eyebrow">FINALIZAR EVALUACIÓN</p>
+                  <h2>¿Entregar ahora tus respuestas?</h2>
+                  <p className="modal-subtitle">
+                    Has respondido <b>{answeredCount} de {totalCount}</b> actividades.
+                    {totalCount - answeredCount > 0 ? (
+                      ` Quedan ${totalCount - answeredCount} pregunta${totalCount - answeredCount === 1 ? '' : 's'} sin responder o pendientes.`
+                    ) : (
+                      ' Has completado todas las preguntas de la evaluación.'
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {pendingIndices.length > 0 && (
+                <div className="finish-pending-section">
+                  <span className="finish-pending-title">⚠️ Preguntas sin responder o pendientes:</span>
+                  <div className="finish-pending-grid">
+                    {pendingIndices.map((pIdx) => (
+                      <button
+                        key={pIdx}
+                        type="button"
+                        className="finish-pending-btn"
+                        onClick={() => {
+                          setShowConfirmModal(false)
+                          onGoToQuestion?.(pIdx)
+                        }}
+                        title={`Ir a responder la pregunta ${pIdx + 1}`}
+                      >
+                        <span>Pregunta {pIdx + 1}</span>
+                        <small>Ir a responder →</small>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="modal-actions">
+                <button type="button" className="outline-button" onClick={() => setShowConfirmModal(false)}>
+                  ← Volver y revisar
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => {
+                    setShowConfirmModal(false)
+                    onNext()
+                  }}
+                >
+                  Entregar evaluación
+                </button>
               </div>
             </div>
-            <div className="modal-actions">
-              <button type="button" className="outline-button" onClick={() => setShowConfirmModal(false)}>
-                ← Volver y revisar
-              </button>
-              <button
-                type="button"
-                className="primary-button"
-                onClick={() => {
-                  setShowConfirmModal(false)
-                  onNext()
-                }}
-              >
-                Entregar evaluación
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
+
+function StudentPreviewModal({
+  activity,
+  onClose,
+}: {
+  activity: Activity
+  onClose: () => void
+}) {
+  const [submitted, setSubmitted] = useState(false)
+  const [draftResponse, setDraftResponse] = useState<ActivityResponse>(() => createInitialResponse(activity))
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-card student-preview-modal">
+        <div className="modal-head">
+          <div>
+            <span className="simulator-badge">👁 MODO SIMULADOR · EXPERIENCIA DEL ALUMNO</span>
+            <h2>{activity.title}</h2>
+            <p className="modal-subtitle">
+              {types[activity.type]?.label} · Así es como el estudiante interactuará con esta actividad.
+            </p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Cerrar simulador">
+            ×
+          </button>
+        </div>
+
+        <div style={{ margin: '14px 0' }}>
+          <PlayView
+            activity={activity}
+            index={0}
+            totalCount={1}
+            allowBack={false}
+            timeLimit={null}
+            submitted={submitted}
+            savedResponse={draftResponse}
+            onSubmit={(resp) => {
+              setDraftResponse(resp)
+              setSubmitted(true)
+            }}
+            onSkip={() => {
+              setSubmitted(true)
+            }}
+            onPrevious={() => {}}
+            onTimeExpired={() => {}}
+            onNext={() => {
+              setSubmitted(false)
+              setDraftResponse(createInitialResponse(activity))
+            }}
+          />
+        </div>
+
+        <div className="modal-actions">
+          <button
+            type="button"
+            className="outline-button"
+            onClick={() => {
+              setSubmitted(false)
+              setDraftResponse(createInitialResponse(activity))
+            }}
+          >
+            🔄 Reiniciar intento
+          </button>
+          <button type="button" className="primary-button" onClick={onClose}>
+            ✓ Cerrar simulador
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MultiSelectQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['multiSelect']>
+  response: Extract<ActivityResponse, { type: 'multiSelect' }>
+  disabled: boolean
+  onChange: (values: string[]) => void
+}) {
+  const selectedValues = response.values || []
+
+  const toggleOption = (identifier: string) => {
+    if (disabled) return
+    const isSelected = selectedValues.includes(identifier)
+    const nextValues = isSelected
+      ? selectedValues.filter((v) => v !== identifier)
+      : [...selectedValues, identifier]
+    onChange(nextValues)
+  }
+
+  return (
+    <div className="structured-question multi-select-board">
+      <p className="editor-help">
+        Selecciona todas las opciones que consideres correctas. Puedes marcar más de una alternativa.
+      </p>
+      <div className="multi-select-options" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {runtime.options.map((option) => {
+          const identifier = option.label || option.id
+          const isSelected = selectedValues.includes(identifier) || selectedValues.includes(option.id)
+          return (
+            <button
+              key={option.id}
+              type="button"
+              disabled={disabled}
+              className={`answer-option ${isSelected ? 'chosen' : ''}`}
+              onClick={() => toggleOption(identifier)}
+              style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: '12px' }}
+            >
+              <span className="option-mark">{isSelected ? '☑' : '☐'}</span>
+              <span style={{ flex: 1 }}>{option.label}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function FillBlanksQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['fillBlanks']>
+  response: Extract<ActivityResponse, { type: 'fillBlanks' }>
+  disabled: boolean
+  onChange: (answers: Record<string, string>) => void
+}) {
+  const answers = response.answers || {}
+  const [activeSlotId, setActiveSlotId] = useState<string | null>(null)
+
+  const wordBank = scrambleWordBank(
+    runtime.blanks.map((b) => b.answer),
+    runtime.distractors || []
+  )
+
+  const usedWords = Object.values(answers)
+
+  const selectWord = (word: string) => {
+    if (disabled || usedWords.includes(word)) return
+    let targetSlot = activeSlotId
+    if (!targetSlot || answers[targetSlot]) {
+      const firstEmpty = runtime.blanks.find((b, idx) => !answers[b.id] && !answers[String(idx + 1)])
+      targetSlot = firstEmpty ? firstEmpty.id : runtime.blanks[0]?.id ?? '1'
+    }
+    const nextAnswers = { ...answers, [targetSlot]: word }
+    onChange(nextAnswers)
+    const nextEmpty = runtime.blanks.find((b) => b.id !== targetSlot && !nextAnswers[b.id])
+    setActiveSlotId(nextEmpty ? nextEmpty.id : null)
+  }
+
+  const clearSlot = (slotKey: string) => {
+    if (disabled) return
+    const nextAnswers = { ...answers }
+    delete nextAnswers[slotKey]
+    onChange(nextAnswers)
+    setActiveSlotId(slotKey)
+  }
+
+  const parts = runtime.textWithBlanks.split(/(\{\{\d+\}\})/)
+
+  return (
+    <div className="structured-question fill-blanks-board">
+      <div className="fill-blanks-bank">
+        <span style={{ width: '100%', fontSize: '0.84rem', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
+          Banco de fichas (toca una palabra para insertarla en un espacio):
+        </span>
+        {wordBank.map((word, idx) => {
+          const isUsed = usedWords.includes(word)
+          return (
+            <button
+              key={`${word}-${idx}`}
+              type="button"
+              disabled={disabled || isUsed}
+              className={`sorting-chip ${isUsed ? 'used-chip' : ''}`}
+              onClick={() => selectWord(word)}
+              title={isUsed ? 'Palabra ya colocada en un espacio' : 'Colocar en un espacio'}
+            >
+              {word}
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="fill-blanks-paragraph">
+        {parts.map((part, pIdx) => {
+          const match = part.match(/^\{\{(\d+)\}\}$/)
+          if (match) {
+            const num = match[1]
+            const blankDef = runtime.blanks[parseInt(num, 10) - 1]
+            const slotKey = blankDef?.id ?? num
+            const filledWord = answers[slotKey] || answers[num]
+            const isActive = activeSlotId === slotKey
+
+            return (
+              <span
+                key={pIdx}
+                role="button"
+                tabIndex={0}
+                className={`fill-blank-slot ${filledWord ? 'filled' : ''} ${isActive ? 'ready-slot' : ''}`}
+                onClick={() => {
+                  if (filledWord) clearSlot(slotKey)
+                  else setActiveSlotId(slotKey)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    if (filledWord) clearSlot(slotKey)
+                    else setActiveSlotId(slotKey)
+                  }
+                }}
+                title={filledWord ? 'Toca para quitar la ficha' : 'Toca para activar este espacio'}
+              >
+                <span className="fill-blank-number">{num}</span>
+                <span>{filledWord || 'Espacio ' + num}</span>
+                {filledWord && !disabled && <span className="fill-blank-clear">×</span>}
+              </span>
+            )
+          }
+          return <span key={pIdx}>{part}</span>
+        })}
+      </div>
+    </div>
+  )
+}
+
+function SpotErrorQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['spotError']>
+  response: Extract<ActivityResponse, { type: 'spotError' }>
+  disabled: boolean
+  onChange: (value: string) => void
+}) {
+  const selectedValue = response.value || ''
+
+  return (
+    <div className="structured-question spot-error-board">
+      <p className="editor-help">
+        Analiza con criterio crítico cada uno de los siguientes enunciados y selecciona cuál es el que contiene el error:
+      </p>
+      <div className="spot-error-list">
+        {runtime.segments.map((seg, idx) => {
+          const isSelected = selectedValue === seg.id || selectedValue === seg.text
+          return (
+            <button
+              key={seg.id || idx}
+              type="button"
+              disabled={disabled}
+              className={`spot-error-segment ${isSelected ? 'chosen' : ''}`}
+              onClick={() => !disabled && onChange(seg.id || seg.text)}
+            >
+              <span className="spot-error-badge">{String.fromCharCode(65 + idx)}</span>
+              <span className="spot-error-text">{seg.text}</span>
+              {isSelected && <span className="spot-error-tag">⚡ Error señalado</span>}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function MarkWordsQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['markWords']>
+  response: Extract<ActivityResponse, { type: 'markWords' }>
+  disabled: boolean
+  onChange: (values: string[]) => void
+}) {
+  const selectedWords = response.values || []
+  const parsed = parseMarkWordsText(runtime.text)
+
+  const toggleWord = (wordText: string) => {
+    if (disabled) return
+    const isMarked = selectedWords.includes(wordText)
+    const next = isMarked
+      ? selectedWords.filter((w) => w !== wordText)
+      : [...selectedWords, wordText]
+    onChange(next)
+  }
+
+  return (
+    <div className="structured-question mark-words-board">
+      <p className="editor-help">
+        Toca sobre los términos del párrafo para resaltarlos con tu dedo o cursor. Vuelve a tocarlos para desmarcarlos.
+      </p>
+      <div className="mark-words-paragraph">
+        {parsed.segments.map((segment, idx) => {
+          if (segment.kind === 'text') {
+            return <span key={idx} className="mark-words-plain">{segment.text}</span>
+          }
+          const isHighlighted = selectedWords.includes(segment.text)
+          return (
+            <button
+              key={`${segment.id}-${idx}`}
+              type="button"
+              disabled={disabled}
+              className={`mark-word-token ${isHighlighted ? 'highlighted' : ''}`}
+              onClick={() => toggleWord(segment.text)}
+              title={isHighlighted ? 'Toca para desmarcar' : 'Toca para resaltar'}
+            >
+              {segment.text}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function GridCheckQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['gridCheck']>
+  response: Extract<ActivityResponse, { type: 'gridCheck' }>
+  disabled: boolean
+  onChange: (values: string[]) => void
+}) {
+  const selectedCells = response.values || []
+
+  const toggleCell = (rowId: string, colId: string) => {
+    if (disabled) return
+    const cellKey = `${rowId}:${colId}`
+    const exists = selectedCells.includes(cellKey)
+    const next = exists
+      ? selectedCells.filter((c) => c !== cellKey)
+      : [...selectedCells, cellKey]
+    onChange(next)
+  }
+
+  return (
+    <div className="structured-question grid-check-board">
+      <p className="editor-help">
+        Marca las casillas en el cruce entre cada concepto (fila) y las propiedades o criterios (columnas) que le correspondan:
+      </p>
+
+      {/* Vista de escritorio (Tabla interactiva) */}
+      <div className="grid-check-desktop-view">
+        <table className="grid-check-table">
+          <thead>
+            <tr>
+              <th className="grid-check-th-corner">Concepto / Criterio</th>
+              {runtime.columns.map((col) => (
+                <th key={col.id} className="grid-check-th-col">
+                  {col.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {runtime.rows.map((row) => (
+              <tr key={row.id}>
+                <td className="grid-check-td-row">
+                  <b>{row.label}</b>
+                </td>
+                {runtime.columns.map((col) => {
+                  const key = `${row.id}:${col.id}`
+                  const isChecked = selectedCells.includes(key)
+                  return (
+                    <td key={col.id} className="grid-check-td-cell">
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        className={`grid-check-cell-btn ${isChecked ? 'checked' : ''}`}
+                        onClick={() => toggleCell(row.id, col.id)}
+                        title={`Marcar o desmarcar ${row.label} - ${col.label}`}
+                      >
+                        <span className="grid-check-cell-icon">{isChecked ? '✓' : ''}</span>
+                      </button>
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Vista móvil (Tarjetas con Chips) */}
+      <div className="grid-check-mobile-view">
+        {runtime.rows.map((row, rIdx) => (
+          <div key={row.id} className="grid-check-mobile-card">
+            <div className="grid-check-card-header">
+              <span className="grid-check-card-num">{rIdx + 1}</span>
+              <strong className="grid-check-card-title">{row.label}</strong>
+            </div>
+            <div className="grid-check-chips-group">
+              {runtime.columns.map((col) => {
+                const key = `${row.id}:${col.id}`
+                const isChecked = selectedCells.includes(key)
+                return (
+                  <button
+                    key={col.id}
+                    type="button"
+                    disabled={disabled}
+                    className={`grid-check-chip-btn ${isChecked ? 'active' : ''}`}
+                    onClick={() => toggleCell(row.id, col.id)}
+                  >
+                    <span className="grid-check-chip-check">{isChecked ? '✓' : '○'}</span>
+                    <span>{col.label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ScenarioQuestion({
   runtime,
   response,

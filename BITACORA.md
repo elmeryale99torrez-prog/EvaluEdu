@@ -1484,3 +1484,39 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
   - Al ejecutar `git push origin main` en el siguiente chat, GitHub Actions compilará la versión pública en verde sin discrepancias ni módulos faltantes.
   - La versión pública permanece intacta hasta que el usuario dé la orden explícita en la siguiente fase.
 
+### Fase 8: Refinamiento Integral de Experiencia (UX/UI), Integración de las 13 Actividades y Modo Simulador · 2026-11-04
+- **Estado:** ✅ **IMPLEMENTADO, PROBADO Y VERIFICADO (34 SUITES, 241/241 PRUEBAS PASANDO, BUILD 100% LIMPIO EN 704ms)**
+- **Alcance Desarrollado:**
+  1. **Integración Completa de los 5 Editores Faltantes en el Editor Docente (`src/App.tsx`):**
+     - Se extendió `ActivityEditorState`, `createEditorState`, `activityToEditorState`, `validateActivityEditor` y `editorStateToActivity` para dar soporte nativo a:
+       - `multiSelect`: `MultiSelectEditor` con gestión de 3 a 6 opciones, casillas de verificación, recuento visual de respuestas correctas, pista obligatoria y explicación privada.
+       - `fillBlanks`: `FillBlanksEditor` con párrafo delimitado por `{{1}}`, `{{2}}`, sincronizador automático de ranuras, asignación de respuestas exactas, banco de distractores, pista obligatoria y explicación privada.
+       - `spotError`: `SpotErrorEditor` con 3 a 6 fragmentos, selector por botón de radio para marcar el fragmento que contiene el error, campo de corrección pedagógica, pista obligatoria y explicación privada.
+       - `markWords`: `MarkWordsEditor` con párrafo continuo, sintaxis amigable `[palabra*]` (diana) y `[palabra]` (distractor), barra de balance de términos detectados en tiempo real con `parseMarkWordsText`, pista obligatoria y explicación privada.
+       - `gridCheck`: `GridCheckEditor` con matriz interactiva bidimensional, creación dinámica de filas y columnas, tabla de cotejo para marcar con un clic las celdas esperadas (`expectedCells`), pista obligatoria y explicación privada.
+     - Conectados en `SpecificActivityEditor`. Ninguna de las 13 actividades cae ya a editores genéricos o por defecto.
+  2. **Integración de las 13 Actividades en la Vista del Estudiante (`PlayView` en `src/App.tsx`):**
+     - Se crearon y conectaron los componentes de interacción estudiantil:
+       - `MultiSelectQuestion`: Tarjetas con casillas interactivas que permiten seleccionar múltiples opciones simultáneamente.
+       - `FillBlanksQuestion`: Banco de fichas táctiles barajado determinísticamente (`scrambleWordBank`), párrafo con ranuras táctiles numeradas (`.fill-blank-slot`), inserción con un toque y remoción instantánea al pulsar la ficha colocada.
+       - `SpotErrorQuestion`: Lista táctil de fragmentos (`.spot-error-segment`) con indicador alfabético (A, B, C...) y etiqueta de "Error señalado".
+       - `MarkWordsQuestion`: Tablero de lectura con párrafo fluido y fichas resaltables (`.mark-word-token.highlighted`) al toque directo.
+       - `GridCheckQuestion`: Vista adaptativa dual (tabla interactiva con casillas `✓` en escritorio; tarjetas por fila con grupo de chips táctiles en móvil).
+     - Caja de feedback orientador formativo adaptada a cada uno de los 13 tipos (`runtime.*.hint`).
+  3. **Refinamiento de la Experiencia de Examen del Alumno:**
+     - **Modal de confirmación inteligente (`finish-confirm-modal`):** Si el estudiante intenta finalizar el examen teniendo preguntas pendientes u omitidas, el modal lista dinámicamente cada una con un botón interactivo (`Pregunta #X · Ir a responder →`). Al hacer clic, el modal se cierra y el examen salta de inmediato a esa pregunta sin fricción.
+     - **Alertas visuales de temporizador:**
+       - Clase `.timer-warning` (ámbar formativo) cuando restan ≤ 5 minutos.
+       - Clase `.timer-danger` (rojo con animación pulsante suave `@keyframes pulseTimer`) cuando resta ≤ 1 minuto.
+  4. **Experiencia Docente: "Probar como Alumno" (Modo Simulador):**
+     - Creado el componente modal `StudentPreviewModal`: permite al docente experimentar cualquier actividad en un entorno sandbox interactivo aislado idéntico al del estudiante, con resolución táctil, comprobación de respuesta, feedback orientador y botón para reiniciar intento.
+     - Conectado con botones `👁 Probar como alumno` en la ficha técnica de actividades (`ActivityPreview`) y en la vista de desglose de variantes de propuestas (`VariantDrilldownModal`).
+  5. **Actualización del Catálogo Oficial (`FORMAT_CATALOG`):**
+     - Las 13 actividades definitivas quedaron formalmente actualizadas a `status: 'active'`, `badge: 'Activo · v1.3'`.
+     - Reemplazado el borrador previo `subcategories` por `markWords` (Marcar Palabras en el Texto).
+  6. **Verificación Técnica Global:**
+     - `src/lib/experienceRefinement.test.ts`: Nueva suite con 6 pruebas integrales de validación, interacción y evaluación para las actividades complementarias.
+     - `npm.cmd test`: **34 suites pasadas, 241/241 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción con Vite exitosos sin errores en 704ms.
+
+

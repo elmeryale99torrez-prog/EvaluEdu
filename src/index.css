@@ -6475,3 +6475,166 @@ body.body-modal-locked {
   border-color: #27343e !important;
   color: #cbd5e1 !important;
 }
+
+/* ==========================================================================
+   ALERTAS VISUALES DE TEMPORIZADOR Y MODAL DE CONFIRMACIÓN DE ENTREGA
+   ========================================================================== */
+.play-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.88rem;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  transition: all 0.25s ease;
+}
+
+.play-timer.timer-warning {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #f59e0b;
+}
+
+.play-timer.timer-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #ef4444;
+  animation: pulseTimer 1.2s infinite ease-in-out;
+}
+
+@keyframes pulseTimer {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.2);
+  }
+}
+
+[data-theme="dark"] .play-timer {
+  background: #161c22;
+  color: #cbd5e1;
+  border-color: #27343e;
+}
+
+[data-theme="dark"] .play-timer.timer-warning {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  border-color: #f59e0b;
+}
+
+[data-theme="dark"] .play-timer.timer-danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border-color: #ef4444;
+}
+
+/* Lista interactiva de preguntas pendientes en modal de confirmación */
+.finish-pending-section {
+  margin: 16px 0;
+  padding: 12px 14px;
+  background: #fffbeb;
+  border: 1px dashed #f59e0b;
+  border-radius: 10px;
+}
+
+.finish-pending-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #92400e;
+  margin-bottom: 10px;
+}
+
+.finish-pending-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.finish-pending-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #ffffff;
+  border: 1px solid #fcd34d;
+  color: #78350f;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  text-align: left;
+}
+
+.finish-pending-btn:hover {
+  background: #fef3c7;
+  border-color: #f59e0b;
+  transform: translateY(-1px);
+}
+
+.finish-pending-btn small {
+  font-size: 0.72rem;
+  color: #b45309;
+}
+
+[data-theme="dark"] .finish-pending-section {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+[data-theme="dark"] .finish-pending-title {
+  color: #fcd34d;
+}
+
+[data-theme="dark"] .finish-pending-btn {
+  background: #161c22;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+[data-theme="dark"] .finish-pending-btn:hover {
+  background: #1e2630;
+  border-color: #f59e0b;
+}
+
+[data-theme="dark"] .finish-pending-btn small {
+  color: #fcd34d;
+}
+
+/* Modal simulador para docentes: "Probar como alumno" */
+.student-preview-modal {
+  max-width: 780px;
+  width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.simulator-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-weight: 700;
+  font-size: 0.76rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+[data-theme="dark"] .simulator-badge {
+  background: rgba(14, 165, 233, 0.18);
+  color: #7dd3fc;
+}
