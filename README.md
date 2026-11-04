@@ -248,18 +248,40 @@ Actualmente las **Fases 1 a 6 de la etapa v1.2** (contratos modulares de las 6 a
    - Guardado transaccional atómico ("todo o nada") e idempotente de `attempts` y `attempt_answers` mediante la función PostgreSQL RPC `submit_student_attempt_atomic`.
    - Control de frecuencia (*Rate Limiting*) en ingreso por código de sala e índice compuesto en `attempt_answers(attempt_id, question_index)`.
    - Pruebas de concurrencia masiva (50 estudiantes simultáneos en `concurrencyStress.test.ts`) con 0% de pérdidas y 100% de consistencia.
-2. **Fase 6 v1.2 (Completada — Modelo SaaS Educativo: Superadministrador y Licencias Institucionales):**
+2. **Fase 6 v1.2 (Completada y Pulida Localmente — Modelo SaaS Educativo y Panel Institucional Formal):**
    - **Cero Espionaje Docente:** Eliminadas del rol administrador las vistas de salas, respuestas y notas de alumnos, preservando la autonomía de cátedra y la privacidad del aula.
-   - **Panel Maestro SaaS (Superadministrador):** Gestión global de colegios clientes, paquetes de licencias vendidas, altas de nuevas instituciones y supervisión del estado del servicio.
+   - **Estándar Visual Formal e Institucional:** Interfaz limpia sin ruido pedagógico-tutorial, sin emojis informales ni banners de debug; diseño sobrio de categoría empresarial (estilo Google Workspace Admin Console / Canvas LMS).
+   - **Panel Maestro SaaS (Administración General):** Métricas consolidadas de instituciones registradas, licencias asignadas y docentes en plataforma; gestión directa de instituciones educativas y supervisión centralizada.
    - **Panel Institucional del Colegio Demo ("Unidad Educativa San Simón"):**
-     - Control visual de cupos y licencias contratadas (14 de 20 licencias en uso, 6 cupos disponibles).
-     - Métricas de adopción escolar (85% docentes activos en el ciclo escolar, 184 evaluaciones realizadas).
-     - Directorio docente con enforzamiento de cupos: alta de profesores (credencial directa o invitación), pausa por licencia médica liberando cupo para suplentes, y reactivación sin costo.
-   - **Inmutabilidad y Blindaje Forense:** Trigger PostgreSQL `trg_prevent_audit_events_mutation` que prohíbe `UPDATE` y `DELETE` en `audit_events`, y Edge Functions niveladas (`admin-create-pilot-teacher`, `admin-remove-user`, `admin-invite-teacher` y `admin-resend-access`).
-3. **📍 Fase 7 (Próximo Foco — Expansión v1.3+ a 21 Actividades y Alistamiento Pre-Comercial):**
-   - Incorporar progresivamente los 15 formatos futuros definidos en [docs/PROPUESTA_CATALOGO_21_ACTIVIDADES.md](docs/PROPUESTA_CATALOGO_21_ACTIVIDADES.md) manteniendo sincronizados el contrato JSON, el validador y la interfaz.
+     - Control visual sobrio de cupos y licencias contratadas (14 de 20 licencias en uso, 6 cupos disponibles).
+     - Métricas institucionales de adopción escolar (85% docentes activos en el ciclo escolar, 184 evaluaciones realizadas).
+     - Directorio docente con enforzamiento de cupos: alta de profesores (credencial directa o invitación por correo), pausa por licencia médica liberando vacante para suplentes, y reactivación sin costo.
+     - Sección de *Políticas Institucionales*: resguardo del banco pedagógico, privacidad de cátedra y custodia segura de datos.
+   - **Libro de Auditoría y Blindaje Forense:** Trazabilidad inmutable de eventos de seguridad y cambios de acceso (`audit_events` protegido en PostgreSQL), y Edge Functions niveladas (`admin-create-pilot-teacher`, `admin-remove-user`, `admin-invite-teacher` y `admin-resend-access`).
+3. **📍 Fase 7 (Completada 100% Local — Catálogo Definitivo Consolidado en 13 Actividades):**
+   - **Decisión de Cierre y Originalidad Pedagógica:** Tras un análisis exhaustivo de autenticidad cognitiva, se descartaron los formatos redundantes o cosméticamente maquillados (`dragTheWords`, `sortParagraphs`, `summary`, `subcategories`, `flashcards`) y se consolidó el catálogo de EvaluEdu en **13 actividades definitivas**, concluyendo la incorporación de nuevos tipos para garantizar el máximo rigor evaluativo sin saturación.
+   - **Catálogo Definitivo de 13 Actividades:**
+     1. `trueFalse` (Falso / Verdadero)
+     2. `singleChoice` (Selección Única)
+     3. `matching` (Asociación por Columnas)
+     4. `sorting` (Clasificación por Categorías)
+     5. `ordering` (Ordenamiento de Procesos)
+     6. `scenario` (Escenario de Decisiones por Etapas)
+     7. `multiSelect` (Selección de Opción Múltiple sin Inducción)
+     8. `fillBlanks` (Completar Espacios con Fichas Táctiles)
+     9. `spotError` (Detección / Identificación del Error)
+     10. `markWords` (Marcar Palabras Clave en el Texto)
+     11. `gridCheck` (Matriz de Doble Entrada / Cotejo)
+     12. `vennDiagram` (Diagrama de Venn / Comparación, Contraste e Intersección)
+     13. `shortAnswer` (Respuesta Corta Conceptual con Evocación Pura)
+   - **Actividad #7 (`multiSelect` — Selección de Opción Múltiple) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/multiSelect.ts`), motor central (`src/lib/activityEngine.ts`), importador JSON v2 (`src/lib/contentImport.ts`), editor docente con casillas de verificación, vista estudiantil sin inducir cantidad de respuestas correctas, impresión en tamaño Carta y Edge Functions locales.
+   - **Actividad #8 (`fillBlanks` — Completar Espacios con Fichas Táctiles) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/fillBlanks.ts`), párrafo con marcadores `{{1}}..{{6}}`, banco cerrado de palabras con distractores barajados (`scrambleWordBank`), interacción táctil y drag-and-drop (`FillBlanksQuestion`), editor docente (`FillBlanksEditor`), impresión en tamaño Carta y Edge Functions locales.
+   - **Actividad #9 (`spotError` — Identificación / Detección del Error) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/spotError.ts`), análisis crítico de 3 a 6 fragmentos con exactamente 1 inconsistencia conceptual (`hasError: true`), corrección privada (`correction`), editor docente (`SpotErrorEditor`), vista estudiantil (`SpotErrorQuestion`), impresión en tamaño Carta, Edge Functions locales y 166 pruebas automatizadas aprobadas.
+   - **Actividad #10 (`markWords` — Marcar Palabras Clave en el Texto) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/markWords.ts`), párrafo de lectura continuo con sintaxis amigable de corchetes `[término*]` (correctos) y `[término]` (distractores), interacción táctil con resaltador (`MarkWordsQuestion`), editor docente con detección en vivo (`MarkWordsEditor`), impresión en tamaño Carta, Edge Functions locales niveladas y 178 pruebas automatizadas aprobadas.
+   - **Actividad #11 (`gridCheck` — Matriz de Doble Entrada) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/gridCheck.ts`), matriz de 2-6 filas por 2-5 columnas con evaluación por celdas exactas (`rowId:colId`), vista dual adaptativa (tabla matricial en escritorio y tarjetas táctiles con chips >44px en móviles), editor docente interactivo (`GridCheckEditor`), impresión en tamaño Carta y vales de respuesta del alumno (`generateExamHtmlDocument`), Edge Functions locales y 192 pruebas automatizadas aprobadas.
+   - **Actividad #12 (`vennDiagram` — Diagrama de Venn / Comparación y Contraste con Intersección) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/vennDiagram.ts`), discriminación conceptual simultánea entre atributos exclusivos de dos conjuntos (`setA`, `setB`) y propiedades compartidas en la intersección central (`both`), experiencia táctil Mobile-First con tablero de 3 zonas y banco interactivo de conceptos con desmarcado ágil, editor docente (`VennDiagramEditor`), generador automático desde plantilla, impresión en tamaño Carta y vales de respuesta (`generateExamHtmlDocument`), Edge Functions locales niveladas y 207 pruebas automatizadas aprobadas.
+   - **Actividad #13 (`shortAnswer` — Respuesta Corta Conceptual) COMPLETADA LOCALMENTE:** Contrato aislado (`src/lib/activities/shortAnswer.ts`), evaluación de evocación activa pura (*recall vs recognition*) sin pistas visuales en pantalla, normalización inteligente de texto (`normalizeShortAnswer`) tolerante a tildes (`ignoreAccents`) y mayúsculas (`caseSensitive`), banco de 1 a 6 respuestas admitidas con límite de 80 caracteres por respuesta, contador en tiempo real, editor docente interactivo (`ShortAnswerEditor`), vista estudiantil (`ShortAnswerQuestion`), generación desde plantilla, impresión en tamaño Carta (`generateExamHtmlDocument`), Edge Functions locales niveladas (`student-room-guest`, `student-room-sync`) y **225 pruebas automatizadas aprobadas (`32/32` suites)**.
    - Alistamiento comercial: Política de Privacidad estudiantil, Términos de Servicio, política de retención de datos y verificación de copias de seguridad (*Backups*).
-
 El formulario manual se conserva como alternativa de respaldo; el flujo JSON validado es el camino principal para preparar contenido nuevo.
 
 ## Espacio de trabajo v1.2

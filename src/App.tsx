@@ -7,7 +7,7 @@ import {
   evaluateActivityResponse,
   isResponseComplete,
 } from './lib/activityEngine'
-import type { Activity, ActivityDetails, ActivityResponse, ActivityType, ChoiceOption, MatchingPair, ScenarioOption, ScenarioStage, SortingItem } from './lib/activityEngine'
+import type { Activity, ActivityDetails, ActivityResponse, ActivityType, ChoiceOption, FillBlankSlot, SpotErrorSegment, MarkWordsToken, GridCheckRow, GridCheckColumn, VennZone, VennItem, MatchingPair, ScenarioOption, ScenarioStage, SortingItem } from './lib/activityEngine'
 import { canAccessPanel, createTeacherProfile, getProfile } from './lib/auth'
 import type { Profile } from './lib/auth'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
@@ -15,6 +15,13 @@ import { enqueueSyncItem, markSyncItemFailed, readSyncQueue, removeSyncItem, syn
 import { detectContentCompatibility, OFFICIAL_IMPORT_PROMPT, type ContentImportDocument, type ContentImportDocumentV1, type ContentImportResultV2, type ContentImportResultV1, type ActivityNeedingRepair, parseContentImport } from './lib/contentImport'
 import { TRUE_FALSE_LIMITS, validateTrueFalseDefinition } from './lib/activities/trueFalse'
 import { SINGLE_CHOICE_LIMITS, validateSingleChoiceDefinition } from './lib/activities/singleChoice'
+import { MULTI_SELECT_LIMITS, validateMultiSelectDefinition } from './lib/activities/multiSelect'
+import { FILL_BLANKS_LIMITS, parseTextWithBlanks, scrambleWordBank, validateFillBlanksDefinition } from './lib/activities/fillBlanks'
+import { SPOT_ERROR_LIMITS, validateSpotErrorDefinition } from './lib/activities/spotError'
+import { MARK_WORDS_LIMITS, parseMarkWordsText, validateMarkWordsDefinition } from './lib/activities/markWords'
+import { GRID_CHECK_LIMITS, validateGridCheckActivity } from './lib/activities/gridCheck'
+import { VENN_DIAGRAM_LIMITS, validateVennDiagramActivity } from './lib/activities/vennDiagram'
+import { SHORT_ANSWER_LIMITS, validateShortAnswerActivity } from './lib/activities/shortAnswer'
 import { MATCHING_LIMITS, scrambleRightOptions, validateMatchingDefinition } from './lib/activities/matching'
 import { SORTING_LIMITS, scrambleSortingItems, validateSortingDefinition } from './lib/activities/sorting'
 import { ORDERING_LIMITS, scrambleOrderingSteps, validateOrderingDefinition } from './lib/activities/ordering'
@@ -22,7 +29,7 @@ import { SCENARIO_LIMITS, validateScenarioDefinition } from './lib/activities/sc
 import {
   IconSun, IconMoon, IconHome, IconContent, IconProposals, IconRooms,
   IconResults, IconUsers, IconAudit, IconTeacher, IconStudent, IconAdmin,
-  IconArrowRight, IconHelp, IconTrueFalse, IconSingleChoice, IconMatching,
+  IconArrowRight, IconHelp, IconTrueFalse, IconSingleChoice, IconMultiSelect, IconFillBlanks, IconSpotError, IconMarkWords, IconGridCheck, IconVennDiagram, IconShortAnswer, IconMatching,
   IconSorting, IconOrdering, IconScenario, IconSparkMascot
 } from './lib/icons'
 
@@ -67,7 +74,14 @@ const allowedPanelViews: Record<'teacher' | 'admin', View[]> = {
 
 const types: Record<ActivityType, { label: string; icon: React.ReactNode; description: string }> = {
   trueFalse: { label: 'Falso / verdadero', icon: <IconTrueFalse size={18} />, description: 'Comprueba una afirmación en un clic.' },
-  singleChoice: { label: 'Selección múltiple', icon: <IconSingleChoice size={18} />, description: 'Una sola opción es correcta.' },
+  singleChoice: { label: 'Selección única', icon: <IconSingleChoice size={18} />, description: 'Una sola opción es correcta.' },
+  multiSelect: { label: 'Selección de opción múltiple', icon: <IconMultiSelect size={18} />, description: 'Dos o más opciones son correctas.' },
+  fillBlanks: { label: 'Completar espacios', icon: <IconFillBlanks size={18} />, description: 'Completa un texto con fichas del banco.' },
+  spotError: { label: 'Detección del error', icon: <IconSpotError size={18} />, description: 'Identifica el fragmento que contiene el error.' },
+  markWords: { label: 'Marcar palabras clave', icon: <IconMarkWords size={18} />, description: 'Resalta con un toque los términos clave en el texto.' },
+  gridCheck: { label: 'Matriz de doble entrada', icon: <IconGridCheck size={18} />, description: 'Compara conceptos contra criterios en una tabla de cotejo.' },
+  vennDiagram: { label: 'Diagrama de Venn', icon: <IconVennDiagram size={18} />, description: 'Compara y contrasta conceptos e intersecciones.' },
+  shortAnswer: { label: 'Respuesta corta', icon: <IconShortAnswer size={18} />, description: 'Escribe el término conceptual exacto sin opciones visibles.' },
   matching: { label: 'Asociación', icon: <IconMatching size={18} />, description: 'Relaciona conceptos y definiciones.' },
   sorting: { label: 'Clasificación', icon: <IconSorting size={18} />, description: 'Arrastra elementos a su categoría.' },
   ordering: { label: 'Ordenamiento', icon: <IconOrdering size={18} />, description: 'Ordena los pasos de un proceso.' },
@@ -77,6 +91,13 @@ const types: Record<ActivityType, { label: string; icon: React.ReactNode; descri
 const initialActivities: Activity[] = [
   { id: 'a2', title: 'Recursos compartidos', type: 'trueFalse', topic: 'Sostenibilidad', difficulty: 'Inicial', prompt: 'Reutilizar materiales reduce la cantidad de residuos.', options: ['Verdadero', 'Falso'], answer: 'Verdadero', feedback: 'Considera qué ocurre con el ciclo de vida de un material cuando vuelve a utilizarse antes de desecharse.', details: { trueFalse: { context: 'En un laboratorio escolar se reutilizan los envases de vidrio limpios para almacenar soluciones durante todo el semestre.', statement: 'Reutilizar materiales reduce la cantidad de residuos que llegan al vertedero.', correct: true, hint: 'Considera qué ocurre con el ciclo de vida de un material cuando vuelve a utilizarse antes de desecharse.', explanation: 'La reutilización prolonga la vida útil del envase y evita generar un residuo de un solo uso en cada práctica.' } }, status: 'published' },
   { id: 'a6', title: 'Una acción sostenible', type: 'singleChoice', topic: 'Sostenibilidad', difficulty: 'Inicial', prompt: '¿Cuál acción disminuye directamente el desperdicio de agua potable en el hogar?', options: ['Cerrar el grifo mientras te cepillas', 'Dejar correr el agua', 'Usar agua potable para limpiar la acera'], answer: 'Cerrar el grifo mientras te cepillas', feedback: 'Analiza en cuál de las acciones se interrumpe el flujo de agua mientras no se está utilizando.', details: { singleChoice: { context: 'En una vivienda urbana se busca reducir el consumo diario de agua potable sin afectar la higiene personal.', hint: 'Analiza en cuál de las acciones se interrumpe el flujo de agua mientras no se está utilizando.', explanation: 'Cerrar el grifo durante el cepillado evita que varios litros de agua potable se pierdan por minuto sin uso efectivo.', options: [{ id: 'a6-opt-1', label: 'Cerrar el grifo mientras te cepillas', correct: true }, { id: 'a6-opt-2', label: 'Dejar correr el agua', correct: false }, { id: 'a6-opt-3', label: 'Usar agua potable para limpiar la acera', correct: false }] } }, status: 'published' },
+  { id: 'a7', title: 'Hábitos de ahorro energético', type: 'multiSelect', topic: 'Sostenibilidad', difficulty: 'Inicial', prompt: '¿Cuáles de las siguientes prácticas reducen de forma efectiva el consumo eléctrico en un aula?', options: ['Aprovechar la iluminación natural durante el día', 'Apagar proyectores y pantallas al finalizar la sesión', 'Mantener encendidos los equipos en modo reposo todo el fin de semana', 'Dejar las luces encendidas durante el recreo'], answer: ['Aprovechar la iluminación natural durante el día', 'Apagar proyectores y pantallas al finalizar la sesión'], feedback: 'Identifica todas las acciones que evitan mantener equipos o luminarias consumiendo energía cuando no se requieren.', details: { multiSelect: { context: 'El comité ambiental del centro educativo evalúa medidas cotidianas para reducir la huella energética de las aulas.', hint: 'Identifica todas las acciones que evitan mantener equipos o luminarias consumiendo energía cuando no se requieren.', explanation: 'Aprovechar la luz natural y desconectar equipos al terminar su uso disminuyen directamente la demanda eléctrica; el modo reposo prolongado y dejar luces encendidas generan consumo innecesario.', options: [{ id: 'a7-opt-1', label: 'Aprovechar la iluminación natural durante el día', correct: true }, { id: 'a7-opt-2', label: 'Apagar proyectores y pantallas al finalizar la sesión', correct: true }, { id: 'a7-opt-3', label: 'Mantener encendidos los equipos en modo reposo todo el fin de semana', correct: false }, { id: 'a7-opt-4', label: 'Dejar las luces encendidas durante el recreo', correct: false }] } }, status: 'published' },
+  { id: 'a8', title: 'Ciclo de gestión responsable', type: 'fillBlanks', topic: 'Sostenibilidad', difficulty: 'Inicial', prompt: 'Completa el enunciado seleccionando la ficha que corresponde a cada espacio numerado.', options: ['reducción', 'reutilización', 'incineración', 'acumulación'], answer: ['reducción', 'reutilización'], feedback: 'Recuerda qué etapa evita generar el residuo desde el origen y cuál prolonga la vida útil del objeto.', details: { fillBlanks: { context: 'En la jerarquía de gestión ambiental escolar se priorizan acciones preventivas antes del descarte.', textWithBlanks: 'La {{1}} disminuye el consumo innecesario desde el origen, mientras que la {{2}} aprovecha nuevamente los materiales antes de desecharlos.', blanks: [{ id: 'a8-b1', answer: 'reducción' }, { id: 'a8-b2', answer: 'reutilización' }], distractors: ['incineración', 'acumulación'], hint: 'Recuerda qué etapa evita generar el residuo desde el origen y cuál prolonga la vida útil del objeto.', explanation: 'Reducir previene la generación de residuos en la fuente y reutilizar extiende el uso funcional de los productos.' } }, status: 'published' },
+  { id: 'a9', title: 'Auditoría de compostaje escolar', type: 'spotError', topic: 'Sostenibilidad', difficulty: 'Intermedio', prompt: 'Analiza los siguientes pasos del protocolo de compostaje escolar y señala aquel que contiene un error:', options: ['1. Incorporar restos vegetales limpios y hojas secas en proporción equilibrada.', '2. Mezclar pilas alcalinas y envases plásticos dentro de la compostera para acelerar la fermentación.', '3. Voltear periódicamente la mezcla para asegurar oxigenación y evitar malos olores.'], answer: '2. Mezclar pilas alcalinas y envases plásticos dentro de la compostera para acelerar la fermentación.', feedback: 'Revisa qué elemento introducido en uno de los pasos contamina el abono con sustancias no biodegradables ni orgánicas.', details: { spotError: { context: 'El taller de ciencias revisa el manual operativo de la compostera del huerto escolar.', segments: [{ id: 'a9-s1', text: '1. Incorporar restos vegetales limpios y hojas secas en proporción equilibrada.', hasError: false }, { id: 'a9-s2', text: '2. Mezclar pilas alcalinas y envases plásticos dentro de la compostera para acelerar la fermentación.', hasError: true }, { id: 'a9-s3', text: '3. Voltear periódicamente la mezcla para asegurar oxigenación y evitar malos olores.', hasError: false }], correction: 'Las pilas y plásticos jamás deben entrar a la compostera; solo se admiten residuos orgánicos biodegradables.', hint: 'Revisa qué elemento introducido en uno de los pasos contamina el abono con sustancias no biodegradables ni orgánicas.', explanation: 'Las pilas contienen metales pesados tóxicos y los plásticos no se biodegradan en el compostaje.' } }, status: 'published' },
+  { id: 'a10', title: 'Transición hacia energías limpias', type: 'markWords', topic: 'Sostenibilidad', difficulty: 'Intermedio', prompt: 'Lee el siguiente texto y resalta con un toque todas las fuentes de energía renovable mencionadas:', options: ['energía solar', 'viento', 'carbón', 'petróleo'], answer: ['energía solar', 'viento'], feedback: 'Identifica las energías que provienen de fuentes naturales inagotables y no de combustibles fósiles.', details: { markWords: { context: 'En el debate sobre sostenibilidad escolar se analiza la matriz energética de la comunidad.', text: 'Para avanzar hacia la descarbonización, la [energía solar*] y el [viento*] actúan como fuentes inagotables, mientras que el [carbón] y el [petróleo] generan altas emisiones.', words: [{ id: 'a10-w1', text: 'energía solar', correct: true }, { id: 'a10-w2', text: 'viento', correct: true }, { id: 'a10-w3', text: 'carbón', correct: false }, { id: 'a10-w4', text: 'petróleo', correct: false }], hint: 'Identifica las energías que provienen de fuentes naturales inagotables y no de combustibles fósiles.', explanation: 'La energía solar y el viento son fuentes renovables; el carbón y el petróleo son combustibles fósiles contaminantes.' } }, status: 'published' },
+  { id: 'a11', title: 'Células y Estructuras', type: 'gridCheck', topic: 'Biología Celular', difficulty: 'Intermedio', prompt: 'Marca en la matriz las estructuras presentes en cada tipo de célula:', options: ['Célula Vegetal', 'Célula Animal', 'Bacteria (Procariota)'], answer: ['r1:c1', 'r1:c2', 'r1:c3', 'r2:c2', 'r3:c1'], feedback: 'Recuerda que los procariotas carecen de núcleo y los animales carecen de pared celular.', details: { gridCheck: { context: 'Estudio comparativo de estructuras y orgánulos en biología celular.', rows: [{ id: 'r1', label: 'Célula Vegetal' }, { id: 'r2', label: 'Célula Animal' }, { id: 'r3', label: 'Bacteria (Procariota)' }], columns: [{ id: 'c1', label: 'Pared Celular' }, { id: 'c2', label: 'Núcleo Definido' }, { id: 'c3', label: 'Cloroplastos' }], expectedCells: ['r1:c1', 'r1:c2', 'r1:c3', 'r2:c2', 'r3:c1'], hint: 'Recuerda que los procariotas carecen de núcleo y los animales carecen de pared celular.', explanation: 'Las células vegetales poseen pared de celulosa, núcleo y cloroplastos. Las animales poseen núcleo pero no pared ni cloroplastos. Las bacterias poseen pared bacteriana pero carecen de núcleo delimitado por membrana.' } }, status: 'published' },
+  { id: 'a13', title: 'Central energética celular', type: 'shortAnswer', topic: 'Biología Celular', difficulty: 'Intermedio', prompt: '¿Cuál es el orgánulo celular responsable de la respiración celular y producción de ATP?', options: [], answer: 'Mitocondria', feedback: 'Piensa en el orgánulo encargado de suministrar la mayor parte de la energía química que necesita la célula.', details: { shortAnswer: { context: 'Metabolismo energético y bioenergética de la célula eucariota.', prompt: '¿Cuál es el orgánulo celular responsable de la respiración celular y producción de ATP?', acceptedAnswers: ['Mitocondria', 'Las mitocondrias', 'Mitocondrias'], caseSensitive: false, ignoreAccents: true, hint: 'Piensa en el orgánulo encargado de suministrar la mayor parte de la energía química que necesita la célula.', explanation: 'Las mitocondrias son los orgánulos encargados de generar ATP mediante la fosforilación oxidativa.' } }, status: 'published' },
+  { id: 'a12', title: 'Célula Animal vs Célula Vegetal', type: 'vennDiagram', topic: 'Biología Celular', difficulty: 'Intermedio', prompt: 'Ubica cada orgánulo o característica en la zona correspondiente del diagrama de Venn:', options: ['Centriolos', 'Cloroplastos', 'Pared de celulosa', 'Membrana plasmática', 'Mitocondrias'], answer: ['Centriolos', 'Cloroplastos', 'Pared de celulosa', 'Membrana plasmática', 'Mitocondrias'], feedback: 'Considera qué estructuras realizan fotosíntesis o dan rigidez y cuáles son comunes al metabolismo celular.', details: { vennDiagram: { context: 'Comparación funcional y estructural de células en biología general.', setA: 'Célula Animal', setB: 'Célula Vegetal', intersectionLabel: 'Ambos / Compartido', items: [{ id: 'a12-i1', label: 'Centriolos', zone: 'left' }, { id: 'a12-i2', label: 'Cloroplastos', zone: 'right' }, { id: 'a12-i3', label: 'Pared de celulosa', zone: 'right' }, { id: 'a12-i4', label: 'Membrana plasmática', zone: 'both' }, { id: 'a12-i5', label: 'Mitocondrias', zone: 'both' }], hint: 'Considera qué estructuras realizan fotosíntesis o dan rigidez y cuáles son comunes al metabolismo celular.', explanation: 'Los centriolos son propios de células animales; la pared celular y cloroplastos son vegetales; la membrana plasmática y mitocondrias son comunes a ambas.' } }, status: 'published' },
   { id: 'a3', title: 'Mapa de actores', type: 'matching', topic: 'Participación', difficulty: 'Intermedio', prompt: 'Enlaza cada actor con su responsabilidad dentro del proyecto.', options: ['Estudiante → propone ideas', 'Docente → facilita el proceso', 'Comunidad → aporta contexto'], answer: ['Estudiante → propone ideas', 'Docente → facilita el proceso', 'Comunidad → aporta contexto'], feedback: 'Observa qué función desempeña directamente cada actor según su ámbito de participación.', details: { matching: { context: 'En un proyecto de convivencia escolar intervienen tres actores con responsabilidades complementarias.', hint: 'Observa qué función desempeña directamente cada actor según su ámbito de participación.', explanation: 'El estudiante aporta iniciativas desde su vivencia en el aula, el docente guía metodológicamente el proceso y la comunidad contextualiza el entorno.', pairs: [{ id: 'a3-p1', left: 'Estudiante', right: 'propone ideas' }, { id: 'a3-p2', left: 'Docente', right: 'facilita el proceso' }, { id: 'a3-p3', left: 'Comunidad', right: 'aporta contexto' }] } }, status: 'published' },
   { id: 'a4', title: '¿Dónde va cada residuo?', type: 'sorting', topic: 'Sostenibilidad', difficulty: 'Inicial', prompt: 'Clasifica cada elemento en la categoría correcta.', options: ['Botella de vidrio', 'Cáscara de fruta', 'Papel limpio', 'Pila usada'], answer: ['Reciclable', 'Orgánico', 'Reciclable', 'Peligroso'], feedback: 'Identifica si el material puede reincorporarse a un ciclo industrial, compostarse o si contiene compuestos tóxicos.', details: { sorting: { context: 'En el punto ecológico del colegio se separan los residuos según su tratamiento posterior y nivel de riesgo.', categories: ['Reciclable', 'Orgánico', 'Peligroso'], items: [{ id: 'a4-i1', label: 'Botella de vidrio', category: 'Reciclable' }, { id: 'a4-i2', label: 'Cáscara de fruta', category: 'Orgánico' }, { id: 'a4-i3', label: 'Papel limpio', category: 'Reciclable' }, { id: 'a4-i4', label: 'Pila usada', category: 'Peligroso' }], hint: 'Identifica si el material puede reincorporarse a un ciclo industrial, compostarse o si contiene compuestos tóxicos.', explanation: 'El vidrio y el papel limpio son reciclables; los restos de fruta son biodegradables (orgánicos); las pilas contienen metales pesados peligrosos.' } }, status: 'published' },
   { id: 'a5', title: 'Pasos para dialogar', type: 'ordering', topic: 'Convivencia', difficulty: 'Intermedio', prompt: 'Ordena el proceso para resolver un desacuerdo.', options: ['Reconocer el problema', 'Escuchar', 'Proponer alternativas', 'Acordar un siguiente paso'], answer: ['Reconocer el problema', 'Escuchar', 'Proponer alternativas', 'Acordar un siguiente paso'], feedback: 'Nombrar el problema y escuchar son la base previa para acordar alternativas viables.', details: { ordering: { context: 'En una asamblea escolar surge un desacuerdo respecto al uso de las áreas deportivas compartidas.', steps: ['Reconocer el problema', 'Escuchar', 'Proponer alternativas', 'Acordar un siguiente paso'], hint: 'Nombrar el problema y escuchar son la base previa para acordar alternativas viables.', explanation: 'Primero se define el conflicto y se escucha a las partes; solo después se diseñan y pactan soluciones compartidas.' } }, status: 'published' },
@@ -1663,7 +1684,7 @@ function App() {
     </header>
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
-      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administrador Maestro SaaS' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Gestión de colegios' : 'Inicio y licencias'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Historial de accesos" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
+      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
       <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
@@ -2035,17 +2056,17 @@ function AdminScopeBanner({
     return (
       <div className="admin-scope-banner institution-mode">
         <div className="scope-info">
-          <span className="scope-tag">MODO DEMO INSTITUCIONAL (COLEGIO CLIENTE)</span>
-          <h3>🏫 {institution.name}</h3>
-          <small>Así es exactamente como el Director de este colegio gestiona sus licencias y profesores · {institution.planName}</small>
+          <span className="scope-tag">PANEL INSTITUCIONAL</span>
+          <h3>{institution.name}</h3>
+          <small>{institution.planName} · Código: {institution.code}</small>
         </div>
         <button
           type="button"
           className="scope-switch-btn superadmin-action"
           onClick={() => setAdminScope('superadmin')}
-          title="Regresar a tu panel maestro de negocio para gestionar todos los colegios"
+          title="Cambiar a administración general"
         >
-          👑 Ver Panel Maestro Superadmin (Elmer) →
+          Administración general →
         </button>
       </div>
     )
@@ -2054,17 +2075,17 @@ function AdminScopeBanner({
   return (
     <div className="admin-scope-banner superadmin-mode">
       <div className="scope-info">
-        <span className="scope-tag">PANEL MAESTRO DE SUPERADMINISTRADOR</span>
-        <h3>👑 EvaluEdu SaaS · Gestión de Colegios Clientes</h3>
-        <small>Vista de negocio de Elmer Yaletorrez · Monitoreo de instituciones contratadas y licencias activas</small>
+        <span className="scope-tag">ADMINISTRACIÓN GENERAL</span>
+        <h3>EvaluEdu · Gestión de Instituciones</h3>
+        <small>Supervisión de instituciones afiliadas, planes y licencias docentes</small>
       </div>
       <button
         type="button"
         className="scope-switch-btn demo-action"
         onClick={onGoToInstitutionDemo}
-        title="Abrir la vista del colegio ficticio de ejemplo para presentaciones de venta"
+        title={`Abrir panel de ${institution.name}`}
       >
-        🏫 Abrir Colegio Demo ({institution.name}) para Venta →
+        Panel institucional ({institution.name}) →
       </button>
     </div>
   )
@@ -2103,16 +2124,16 @@ function RegisterInstitutionModal({
       <div className="modal-card institution-register-modal">
         <div className="modal-head">
           <div>
-            <p className="eyebrow">NUEVO CLIENTE SAAS</p>
-            <h2>Registrar Nueva Institución Educativa</h2>
-            <p className="modal-subtitle">Asigna un paquete de licencias y habilita el acceso para el director del colegio.</p>
+            <p className="eyebrow">INSTITUCIONES</p>
+            <h2>Registrar institución educativa</h2>
+            <p className="modal-subtitle">Asigna un plan, cupo de licencias y el contacto del responsable institucional.</p>
           </div>
           <button type="button" className="icon-button" onClick={onClose}>×</button>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
           <label>
-            Nombre oficial de la institución / colegio
+            Nombre oficial de la institución
             <input
               type="text"
               placeholder="Ej. Unidad Educativa San Simón"
@@ -2147,7 +2168,7 @@ function RegisterInstitutionModal({
           </div>
 
           <label>
-            Plan institucional contratado
+            Plan institucional
             <input
               type="text"
               placeholder="Ej. Licencia Institucional Anual (Secundaria)"
@@ -2159,7 +2180,7 @@ function RegisterInstitutionModal({
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <label>
-              Nombre del Director / Rector
+              Nombre del Director o Rector
               <input
                 type="text"
                 placeholder="Ej. Lic. Roberto Valdez"
@@ -2169,10 +2190,10 @@ function RegisterInstitutionModal({
               />
             </label>
             <label>
-              Correo institucional del Director
+              Correo institucional del contacto
               <input
                 type="email"
-                placeholder="director@colegio.edu.bo"
+                placeholder="director@institucion.edu.bo"
                 value={contactEmail}
                 onChange={(e) => setContactEmail(e.target.value)}
                 required
@@ -2181,7 +2202,7 @@ function RegisterInstitutionModal({
           </div>
 
           <label>
-            Vigencia del contrato
+            Fecha de vigencia del plan
             <input
               type="date"
               value={validUntil}
@@ -2190,13 +2211,9 @@ function RegisterInstitutionModal({
             />
           </label>
 
-          <div className="auth-message success">
-            Al registrar la institución, se habilitará el paquete de {licenseLimit} licencias docentes bajo su administración.
-          </div>
-
           <div className="modal-actions">
             <button type="button" className="outline-button" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="primary-button">Registrar Institución →</button>
+            <button type="submit" className="primary-button">Registrar institución</button>
           </div>
         </form>
       </div>
@@ -2251,12 +2268,12 @@ function AdminDashboard({
       {adminScope === 'superadmin' ? (
         <>
           <PageIntro
-            eyebrow="EVALUEDU SAAS · PANEL MAESTRO"
-            title="Gestión Global de Instituciones y Clientes"
-            description="Administra los colegios suscritos a EvaluEdu, supervisa paquetes de licencias vendidas y da de alta nuevas instituciones educativas."
+            eyebrow="ADMINISTRACIÓN GENERAL"
+            title="Instituciones Educativas"
+            description="Gestión de instituciones suscritas, planes y asignación de licencias docentes."
             action={
               <button className="primary-button" onClick={() => setShowRegisterModal(true)}>
-                ＋ Registrar nuevo colegio
+                ＋ Registrar institución
               </button>
             }
           />
@@ -2265,29 +2282,29 @@ function AdminDashboard({
             <Metric
               icon="🏫"
               value={institutions.length}
-              label="Colegios clientes"
-              trend="Instituciones educativas afiliadas"
+              label="Instituciones"
+              trend="Colegios y centros afiliados"
               tone="mint"
             />
             <Metric
               icon="📜"
               value={totalLicensesSold}
-              label="Licencias vendidas"
-              trend={`${totalActiveLicenses} docentes activos en total`}
+              label="Licencias asignadas"
+              trend={`${totalActiveLicenses} en uso activo`}
               tone="lavender"
             />
             <Metric
               icon="👨‍🏫"
               value={totalActiveLicenses}
-              label="Docentes en servicio"
-              trend="Utilizando EvaluEdu activamente"
+              label="Docentes activos"
+              trend="Usuarios con acceso vigente"
               tone="peach"
             />
             <Metric
               icon="✓"
               value="100%"
-              label="Disponibilidad SaaS"
-              trend="Servidores y Supabase operativos"
+              label="Estado del servicio"
+              trend="Sistemas operativos"
               tone="mint"
             />
           </div>
@@ -2295,10 +2312,9 @@ function AdminDashboard({
           <section className="panel" style={{ marginTop: '16px' }}>
             <div className="panel-heading">
               <div>
-                <h2>Padrón de Instituciones Clientes ({institutions.length})</h2>
-                <p>Haz clic en cualquier colegio para ver su panel institucional y probar la experiencia de demo comercial.</p>
+                <h2>Instituciones registradas ({institutions.length})</h2>
+                <p>Nómina de colegios, planes vigentes y consumo de cupos docentes.</p>
               </div>
-              <span className="tag published">Plataforma SaaS</span>
             </div>
 
             <div className="table-scroll-hint-bar">
@@ -2309,10 +2325,10 @@ function AdminDashboard({
               <table>
                 <thead>
                   <tr>
-                    <th>Colegio / Institución</th>
-                    <th>Plan contratado</th>
-                    <th>Cupo de licencias</th>
-                    <th>Director / Contacto</th>
+                    <th>Institución</th>
+                    <th>Plan</th>
+                    <th>Licencias</th>
+                    <th>Responsable</th>
                     <th>Vigencia</th>
                     <th>Estado</th>
                     <th>Acción</th>
@@ -2320,7 +2336,6 @@ function AdminDashboard({
                 </thead>
                 <tbody>
                   {institutions.map((inst) => {
-                    const isDemo = inst.id === 'inst-san-simon'
                     return (
                       <tr key={inst.id}>
                         <td>
@@ -2331,7 +2346,7 @@ function AdminDashboard({
                         <td>
                           <strong>{inst.activeLicenses} de {inst.licenseLimit}</strong>
                           <small style={{ display: 'block', color: '#688275' }}>
-                            {Math.max(0, inst.licenseLimit - inst.activeLicenses)} libres
+                            {Math.max(0, inst.licenseLimit - inst.activeLicenses)} disponibles
                           </small>
                         </td>
                         <td>
@@ -2348,13 +2363,13 @@ function AdminDashboard({
                           <button
                             type="button"
                             className="primary-button"
-                            style={{ fontSize: '11px', padding: '6px 10px', whiteSpace: 'nowrap' }}
+                            style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
                             onClick={() => {
                               onSelectInstitution(inst.id)
                               setAdminScope('institution')
                             }}
                           >
-                            👁️ {isDemo ? 'Abrir Demo Venta →' : 'Ver colegio →'}
+                            Gestionar →
                           </button>
                         </td>
                       </tr>
@@ -2378,34 +2393,34 @@ function AdminDashboard({
       ) : (
         <>
           <PageIntro
-            eyebrow={`GESTIÓN INSTITUCIONAL · ${activeInstitution.name.toUpperCase()}`}
-            title="Tablero de Licencias y Claustro Docente"
-            description="Supervisa las licencias docentes contratadas, el claustro de profesores y la adopción escolar."
-            action={<span className="tag published">{activeInstitution.planName} · Activo</span>}
+            eyebrow="PANEL DIRECTIVO"
+            title={activeInstitution.name}
+            description="Supervisión de licencias docentes, claustro institucional y métricas de adopción."
+            action={<span className="tag published">{activeInstitution.planName}</span>}
           />
 
           <div className="license-hero-card">
             <div className="license-hero-header">
               <div>
                 <h2>{activeInstitution.name}</h2>
-                <p>Dirección Académica · {activeInstitution.contactName} ({activeInstitution.contactEmail})</p>
+                <p>Contacto institucional: {activeInstitution.contactName} ({activeInstitution.contactEmail})</p>
               </div>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <span className={`license-badge ${availableLicenses === 0 ? 'warning' : ''}`}>
                   {availableLicenses > 0
-                    ? `✓ ${availableLicenses} licencias disponibles`
-                    : '⚠️ Cupo completo'}
+                    ? `${availableLicenses} disponibles`
+                    : 'Cupo completo'}
                 </span>
                 <span className="license-badge">
-                  📅 Vigencia: {activeInstitution.validUntil}
+                  Vigencia: {activeInstitution.validUntil}
                 </span>
               </div>
             </div>
 
             <div className="license-meter-wrap">
               <div className="license-meter-labels">
-                <b>Consumo de licencias docentes contratadas:</b>
-                <span>{activeTeachersCount} de {activeInstitution.licenseLimit} en uso ({quotaPercent}%)</span>
+                <b>Licencias docentes:</b>
+                <span>{activeTeachersCount} de {activeInstitution.licenseLimit} asignadas ({quotaPercent}%)</span>
               </div>
               <div className="license-track">
                 <div
@@ -2417,15 +2432,15 @@ function AdminDashboard({
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e5ede7', paddingTop: '12px' }}>
               <small style={{ color: '#557766' }}>
-                Cada profesor en servicio consume 1 licencia. Puedes pausar cuentas por licencia médica para transferir el cupo a un suplente.
+                Código: {activeInstitution.code} · Plan: {activeInstitution.planName}
               </small>
               <button
                 type="button"
                 className="primary-button"
-                style={{ fontSize: '12px', padding: '7px 12px' }}
+                style={{ fontSize: '12px', padding: '7px 14px' }}
                 onClick={() => onNavigate('adminUsers')}
               >
-                ＋ Asignar licencia a profesor
+                Directorio docente →
               </button>
             </div>
           </div>
@@ -2435,28 +2450,28 @@ function AdminDashboard({
               icon="📜"
               value={activeInstitution.licenseLimit}
               label="Plazas contratadas"
-              trend={`${availableLicenses} cupos libres para el colegio`}
+              trend={`${availableLicenses} disponibles`}
               tone="mint"
             />
             <Metric
               icon="👨‍🏫"
               value={activeTeachersCount}
-              label="Profesores en servicio"
-              trend="Cuerpo docente activo del colegio"
+              label="Docentes en servicio"
+              trend="Nómina activa"
               tone="lavender"
             />
             <Metric
               icon="📈"
               value={`${activeInstitution.stats.activeTeachersPercent}%`}
-              label="Tasa de adopción escolar"
-              trend="Docentes evaluando activamente"
+              label="Tasa de adopción"
+              trend="Docentes activos en aula"
               tone="peach"
             />
             <Metric
               icon="📝"
               value={activeInstitution.stats.totalEvaluations}
-              label="Evaluaciones en el ciclo"
-              trend="Actividad pedagógica institucional"
+              label="Evaluaciones del periodo"
+              trend="Pruebas aplicadas"
               tone="mint"
             />
           </div>
@@ -2464,48 +2479,48 @@ function AdminDashboard({
           <section className="panel" style={{ marginTop: '16px' }}>
             <div className="panel-heading">
               <div>
-                <h2>Garantías del Software Institucional</h2>
-                <p>Propiedad del colegio, autonomía pedagógica y custodia normativa.</p>
+                <h2>Políticas Institucionales</h2>
+                <p>Estándares de operación y resguardo de la información.</p>
               </div>
             </div>
             <div className="health-line">
               <span className="health-dot ready" />
               <div>
-                <b>Patrimonio Pedagógico del Colegio</b>
-                <small>Las plantillas y actividades pedagógicas pertenecen a la institución y no se pierden si un profesor renuncia.</small>
+                <b>Propiedad del Banco Pedagógico</b>
+                <small>Las evaluaciones, plantillas y actividades generadas pertenecen a la institución educativa.</small>
               </div>
-              <strong>Garantizado</strong>
+              <strong>Institucional</strong>
             </div>
             <div className="health-line">
               <span className="health-dot ready" />
               <div>
-                <b>Autonomía y Privacidad Docente</b>
-                <small>Los profesores califican con plena autonomía. La dirección supervisa el uso institucional sin espiar notas de alumnos.</small>
+                <b>Autonomía de Cátedra y Privacidad</b>
+                <small>Los docentes evalúan con autonomía. La dirección gestiona accesos sin invadir los resultados individuales.</small>
               </div>
-              <strong>Respetado</strong>
+              <strong>Protegido</strong>
             </div>
             <div className="health-line">
               <span className="health-dot ready" />
               <div>
-                <b>Custodia Normativa Segura</b>
-                <small>Cumplimiento estricto de resguardo de datos escolares de menores en servidores seguros certificados.</small>
+                <b>Custodia Segura de Datos</b>
+                <small>Resguardo estricto y cifrado de los registros y evaluaciones de los estudiantes.</small>
               </div>
-              <strong>Certificado</strong>
+              <strong>Conforme</strong>
             </div>
           </section>
 
           <section className="panel admin-quick-actions" style={{ marginTop: '16px' }}>
             <div>
               <p className="eyebrow">ACCIONES INSTITUCIONALES</p>
-              <h2>Gestión del Colegio</h2>
-              <p>Administra las plazas docentes o consulta el registro administrativo de accesos.</p>
+              <h2>Gestión directa</h2>
+              <p>Accede a las áreas principales del colegio.</p>
             </div>
             <div className="admin-action-grid">
               <button className="outline-button" onClick={() => onNavigate('adminUsers')}>
-                👥 Directorio Docente y Cupos
+                Directorio docente
               </button>
               <button className="outline-button" onClick={() => onNavigate('adminAudit')}>
-                📋 Historial de Accesos Institucionales
+                Historial de accesos
               </button>
             </div>
           </section>
@@ -2750,7 +2765,7 @@ function AdminUsersView({
         onGoToInstitutionDemo={onHome}
       />
 
-      {/* Pestañas de origen de docentes: Cuentas Reales de la Plataforma vs Claustro del Colegio */}
+      {/* Pestañas de origen de docentes: Directorio de la Plataforma vs Claustro Institucional */}
       <div className="admin-filter-tabs" style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
         <button
           type="button"
@@ -2762,7 +2777,7 @@ function AdminUsersView({
           }}
           style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
         >
-          🌐 Docentes de la Plataforma (Cuentas Reales Supabase · {realUsers.length})
+          Docentes de la plataforma ({realUsers.length})
         </button>
         <button
           type="button"
@@ -2774,48 +2789,38 @@ function AdminUsersView({
           }}
           style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
         >
-          🏫 Claustro Institucional ({institution.name} · {teachers.length})
+          Claustro institucional ({institution.name})
         </button>
       </div>
 
       {userSource === 'platform' ? (
-        <>
-          <PageIntro
-            eyebrow="CUENTAS DE LA PLATAFORMA · SUPERADMINISTRADOR"
-            title="Directorio de Docentes Independientes y Registrados"
-            description="Gestiona todas las cuentas de docentes registradas en Supabase. Asigna contraseñas directas, envía invitaciones oficiales y administra suspensiones o reactivaciones."
-            action={
-              canManageUsers ? (
-                <button
-                  className="primary-button"
-                  onClick={() => {
-                    setStatus(null)
-                    setAccessMode('pilot')
-                    setShowInvite(true)
-                  }}
-                >
-                  ＋ Crear o invitar docente
-                </button>
-              ) : (
-                <span className="demo-admin-tag">Acceso de solo lectura</span>
-              )
-            }
-          />
-
-          <div className="admin-notice">
-            <span>✓</span>
-            <div>
-              <b>{adminData ? 'Directorio en tiempo real conectado con Supabase.' : 'Cargando directorio de la plataforma…'}</b>
-              <p>{adminData ? `${realUsers.length} cuentas registradas en total en la base de datos.` : 'Consultando las cuentas registradas en el backend…'}</p>
-            </div>
-          </div>
-        </>
+        <PageIntro
+          eyebrow="ADMINISTRACIÓN GENERAL"
+          title="Directorio de Docentes"
+          description="Gestión centralizada de cuentas de docentes registradas. Creación de accesos, invitaciones y administración de cuentas."
+          action={
+            canManageUsers ? (
+              <button
+                className="primary-button"
+                onClick={() => {
+                  setStatus(null)
+                  setAccessMode('pilot')
+                  setShowInvite(true)
+                }}
+              >
+                ＋ Nuevo docente
+              </button>
+            ) : (
+              <span className="demo-admin-tag">Acceso de solo lectura</span>
+            )
+          }
+        />
       ) : (
         <>
           <PageIntro
             eyebrow={`CLAUSTRO DOCENTE · ${institution.name.toUpperCase()}`}
-            title="Directorio Docente y Asignación de Licencias"
-            description={`Gestiona las ${institution.licenseLimit} plazas contratadas por el colegio. Asigna credenciales directas y administra licencias médicas.`}
+            title="Directorio Docente"
+            description={`Gestión de plazas y licencias del personal docente asignado a la institución (${institution.licenseLimit} licencias contratadas).`}
             action={
               <button
                 className="primary-button"
@@ -2825,7 +2830,7 @@ function AdminUsersView({
                   setShowInvite(true)
                 }}
               >
-                ＋ Asignar licencia a profesor
+                ＋ Asignar docente
               </button>
             }
           />
@@ -2834,12 +2839,12 @@ function AdminUsersView({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <b style={{ fontSize: '13px', color: '#1a3e33' }}>
-                  Estado del paquete contratado ({institution.planName}):
+                  Licencias institucionales ({institution.planName}):
                 </b>
                 <div style={{ fontSize: '12px', color: '#4a6e5f', marginTop: '2px' }}>
-                  <b>{activeCount}</b> de <b>{institution.licenseLimit}</b> licencias ocupadas ·
+                  <b>{activeCount}</b> de <b>{institution.licenseLimit}</b> asignadas ·
                   <span style={{ color: availableLicenses > 0 ? '#287758' : '#c47a18', fontWeight: 'bold', marginLeft: '5px' }}>
-                    {availableLicenses > 0 ? `${availableLicenses} cupos disponibles` : 'Sin cupos libres'}
+                    {availableLicenses > 0 ? `${availableLicenses} disponibles` : 'Sin cupos disponibles'}
                   </span>
                 </div>
               </div>
@@ -2861,7 +2866,7 @@ function AdminUsersView({
           <span className="search-icon">🔍</span>
           <input
             type="text"
-            placeholder={userSource === 'platform' ? 'Buscar cuenta por nombre o correo...' : 'Buscar profesor por nombre o correo...'}
+            placeholder="Buscar por nombre o correo..."
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
           />
@@ -2871,15 +2876,15 @@ function AdminUsersView({
             Todos ({activeRoster.length})
           </button>
           <button type="button" className={`admin-filter-tab ${statusTab === 'active' ? 'active' : ''}`} onClick={() => setStatusTab('active')}>
-            🟢 Activos ({activeRoster.filter((t) => t.status === 'Activo').length})
+            Activos ({activeRoster.filter((t) => t.status === 'Activo').length})
           </button>
           {userSource === 'platform' && (
             <button type="button" className={`admin-filter-tab ${statusTab === 'pending' ? 'active' : ''}`} onClick={() => setStatusTab('pending')}>
-              🟡 Pendientes ({activeRoster.filter((t) => t.status === 'Pendiente').length})
+              Pendientes ({activeRoster.filter((t) => t.status === 'Pendiente').length})
             </button>
           )}
           <button type="button" className={`admin-filter-tab ${statusTab === 'disabled' ? 'active' : ''}`} onClick={() => setStatusTab('disabled')}>
-            ⚪ {userSource === 'platform' ? 'Desactivados' : 'En licencia / Pausados'} ({activeRoster.filter((t) => t.status === 'Bloqueado').length})
+            Inactivos ({activeRoster.filter((t) => t.status === 'Bloqueado').length})
           </button>
         </div>
       </div>
@@ -2887,18 +2892,14 @@ function AdminUsersView({
       <section className="panel">
         <div className="panel-heading">
           <div>
-            <h2>{userSource === 'platform' ? `Cuentas de Docentes (${filteredUsers.length})` : 'Cuerpo Docente de la Institución'}</h2>
+            <h2>{userSource === 'platform' ? `Docentes registrados (${filteredUsers.length})` : `Claustro de profesores (${filteredUsers.length})`}</h2>
             <p>
               {userSource === 'platform'
-                ? 'Historial de registros y gestión de credenciales en Supabase Auth y base de datos.'
-                : 'Pausar a un profesor por licencia médica libera temporalmente su plaza para un suplente sin pagar doble.'}
+                ? 'Historial de registros y gestión de credenciales de acceso.'
+                : 'Control de asignación y disponibilidad de plazas del personal docente.'}
             </p>
           </div>
-          <span className="tag published">{userSource === 'platform' ? 'Supabase' : institution.name}</span>
-        </div>
-
-        <div className="table-scroll-hint-bar">
-          <span className="table-scroll-hint">↔ Desliza la tabla horizontalmente para ver todos los datos</span>
+          <span className="tag published">{userSource === 'platform' ? 'Directorio global' : institution.name}</span>
         </div>
 
         <div className="results-table-wrap">
@@ -2939,17 +2940,17 @@ function AdminUsersView({
                       <td>
                         <span className={`result-status ${isBlocked ? 'timeout' : user.status === 'Pendiente' ? 'waiting' : ''}`}>
                           {isBlocked
-                            ? userSource === 'platform' ? 'Desactivado' : 'Pausado (Licencia médica)'
+                            ? 'Inactivo'
                             : user.status === 'Pendiente'
-                            ? 'Pendiente de confirmación'
+                            ? 'Pendiente'
                             : 'Activo'}
                         </span>
                       </td>
                       <td>{formatDate(user.createdAt)}</td>
-                      <td>{user.lastSignInAt ? formatDate(user.lastSignInAt) : 'Aún no ingresa'}</td>
+                      <td>{user.lastSignInAt ? formatDate(user.lastSignInAt) : 'Sin ingresos'}</td>
                       <td>
                         {isAdmin ? (
-                          <span className="muted">Protegido (Admin)</span>
+                          <span className="muted">Administrador</span>
                         ) : userSource === 'platform' ? (
                           <div className="table-actions">
                             {isBlocked ? (
@@ -2959,9 +2960,8 @@ function AdminUsersView({
                                 style={{ color: '#287758' }}
                                 disabled={removingId === user.id}
                                 onClick={() => void handleToggleRealUser(user, 'enable')}
-                                title="Reactivar la cuenta del docente en Supabase"
                               >
-                                {removingId === user.id ? 'Reactivando…' : 'Reactivar usuario'}
+                                {removingId === user.id ? 'Reactivando…' : 'Reactivar'}
                               </button>
                             ) : (
                               <>
@@ -2970,18 +2970,16 @@ function AdminUsersView({
                                   className="text-button"
                                   disabled={resendingId === user.id}
                                   onClick={() => void handleResendAccess(user)}
-                                  title="Enviar enlace para que el docente cree o restablezca su contraseña"
                                 >
-                                  {resendingId === user.id ? 'Enviando…' : user.status === 'Pendiente' ? 'Reenviar acceso' : 'Restablecer acceso'}
+                                  {resendingId === user.id ? 'Enviando…' : user.status === 'Pendiente' ? 'Reenviar acceso' : 'Restablecer clave'}
                                 </button>
                                 <button
                                   type="button"
                                   className="text-button danger-text-button"
                                   disabled={removingId === user.id}
                                   onClick={() => void handleToggleRealUser(user, 'disable')}
-                                  title="Pausar o desactivar la cuenta del docente en Supabase"
                                 >
-                                  {removingId === user.id ? 'Desactivando…' : 'Desactivar usuario'}
+                                  {removingId === user.id ? 'Pausando…' : 'Desactivar'}
                                 </button>
                               </>
                             )}
@@ -2994,18 +2992,16 @@ function AdminUsersView({
                                 className="text-button"
                                 style={{ color: '#287758' }}
                                 onClick={() => onToggleTeacherStatus(user, 'enable')}
-                                title="Reactivar la licencia para este profesor"
                               >
-                                Reactivar profesor
+                                Reactivar
                               </button>
                             ) : (
                               <button
                                 type="button"
                                 className="text-button danger-text-button"
                                 onClick={() => onToggleTeacherStatus(user, 'disable')}
-                                title="Pausar el acceso del profesor para liberar su cupo a un suplente"
                               >
-                                Pausar (Licencia médica)
+                                Pausar
                               </button>
                             )}
                           </div>
@@ -3018,7 +3014,7 @@ function AdminUsersView({
                 <tr>
                   <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: '#688275' }}>
                     {userSource === 'platform' && !adminData
-                      ? 'Cargando usuarios desde Supabase…'
+                      ? 'Cargando usuarios…'
                       : 'No se encontraron docentes con los filtros aplicados.'}
                   </td>
                 </tr>
@@ -3034,12 +3030,12 @@ function AdminUsersView({
           <div className="modal-card admin-invite-modal">
             <div className="modal-head">
               <div>
-                <p className="eyebrow">{userSource === 'platform' ? 'ALTA DE DOCENTE EN SUPABASE' : 'ASIGNACIÓN DE LICENCIA DOCENTE'}</p>
-                <h2>{accessMode === 'pilot' ? 'Asignar contraseña directa' : 'Invitar docente por correo'}</h2>
+                <p className="eyebrow">{userSource === 'platform' ? 'ALTA DE DOCENTE' : 'ASIGNACIÓN DE LICENCIA'}</p>
+                <h2>{accessMode === 'pilot' ? 'Asignar credenciales de acceso' : 'Invitar docente por correo'}</h2>
                 <p className="modal-subtitle">
                   {accessMode === 'pilot'
-                    ? 'Recomendado: Define usuario y contraseña temporal para que el docente ingrese hoy mismo.'
-                    : 'El docente recibirá un enlace en su correo para activar su cuenta.'}
+                    ? 'Define el nombre del docente y una contraseña temporal para su acceso inmediato.'
+                    : 'El docente recibirá un enlace por correo para configurar su contraseña.'}
                 </p>
               </div>
               <button type="button" className="icon-button" onClick={closeInviteModal}>×</button>
@@ -3051,7 +3047,7 @@ function AdminUsersView({
                 className={accessMode === 'pilot' ? 'primary-button' : 'outline-button'}
                 onClick={() => { setStatus(null); setAccessMode('pilot') }}
               >
-                Contraseña directa (Inmediata)
+                Contraseña directa
               </button>
               <button
                 type="button"
@@ -3064,11 +3060,11 @@ function AdminUsersView({
 
             <form className="auth-form" onSubmit={userSource === 'platform' ? (accessMode === 'pilot' ? createPilotTeacher : inviteTeacher) : handleCreateInstitutionalTeacher}>
               <label>
-                Nombre del docente (con título)
+                Nombre completo del docente
                 <input
                   value={displayName}
                   onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="Ej. Prof. Lucía Martínez"
+                  placeholder="Ej. Lucía Martínez"
                   minLength={2}
                   required
                 />
@@ -3100,7 +3096,7 @@ function AdminUsersView({
                     />
                   </label>
                   <label>
-                    Repetir contraseña
+                    Confirmar contraseña
                     <input
                       type="password"
                       value={pilotConfirmation}
@@ -3114,18 +3110,10 @@ function AdminUsersView({
                 </>
               )}
 
-              <div className="auth-message success">
-                {userSource === 'platform'
-                  ? accessMode === 'pilot'
-                    ? 'Se creará el perfil docente con correo confirmado en Supabase para acceso inmediato.'
-                    : 'Se enviará una invitación segura por correo con el rol de docente.'
-                  : `Esta acción consumirá 1 de los ${availableLicenses} cupos de licencia disponibles para ${institution.name}.`}
-              </div>
-
               <div className="modal-actions">
                 <button type="button" className="outline-button" onClick={closeInviteModal}>Cancelar</button>
                 <button type="submit" className="primary-button" disabled={saving}>
-                  {saving ? (accessMode === 'pilot' ? 'Creando cuenta…' : 'Enviando…') : (accessMode === 'pilot' ? 'Asignar acceso →' : 'Enviar invitación →')}
+                  {saving ? 'Guardando…' : accessMode === 'pilot' ? 'Registrar docente' : 'Enviar invitación'}
                 </button>
               </div>
             </form>
@@ -3209,7 +3197,7 @@ function AdminAuditView({
           }}
           style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
         >
-          🌐 Auditoría Global de Supabase ({realAuditLogs.length} eventos)
+          Auditoría de plataforma ({realAuditLogs.length})
         </button>
         <button
           type="button"
@@ -3220,19 +3208,19 @@ function AdminAuditView({
           }}
           style={{ fontWeight: 600, padding: '10px 18px', fontSize: '13px' }}
         >
-          🏫 Movimientos Institucionales ({institution.name})
+          Auditoría institucional ({institution.name})
         </button>
       </div>
 
       <PageIntro
-        eyebrow={auditSource === 'platform' ? 'LIBRO DE AUDITORÍA · SUPABASE' : `HISTORIAL INSTITUCIONAL · ${institution.name.toUpperCase()}`}
-        title={auditSource === 'platform' ? 'Registro Inmutable de Eventos de la Plataforma' : 'Registro de Accesos y Licencias Docentes'}
+        eyebrow={auditSource === 'platform' ? 'REGISTRO DE SEGURIDAD' : `HISTORIAL INSTITUCIONAL · ${institution.name.toUpperCase()}`}
+        title="Registro de Auditoría"
         description={
           auditSource === 'platform'
-            ? 'Historial de eventos de seguridad y administración registrado directamente en la tabla audit_events de Supabase con protección estricta contra eliminación o alteración.'
-            : 'Historial administrativo de asignación de licencias, altas de profesores, licencias médicas y gestión de credenciales.'
+            ? 'Trazabilidad de eventos de seguridad, inicio de sesión y administración de accesos.'
+            : 'Historial de asignación de plazas, altas y modificaciones de credenciales docentes.'
         }
-        action={<span className="tag published">{auditSource === 'platform' ? 'Supabase Inmutable' : 'Registro Local'}</span>}
+        action={<span className="tag published">{auditSource === 'platform' ? 'Registro central' : institution.name}</span>}
       />
 
       <div className="admin-filter-bar">
@@ -3252,13 +3240,13 @@ function AdminAuditView({
           <div>
             <h2>
               {auditSource === 'platform'
-                ? `Eventos Registrados en la Base de Datos (${filteredLogs.length})`
-                : `Historial de Movimientos de Licencias (${filteredLogs.length})`}
+                ? `Eventos registrados (${filteredLogs.length})`
+                : `Movimientos registrados (${filteredLogs.length})`}
             </h2>
             <p>
               {auditSource === 'platform'
-                ? 'Eventos protegidos con trigger PostgreSQL que impide UPDATE y DELETE.'
-                : 'Garantía de transparencia administrativa para auditorías escolares.'}
+                ? 'Historial de operaciones del sistema protegido contra modificaciones.'
+                : 'Registro oficial de movimientos y asignación de licencias del colegio.'}
             </p>
           </div>
         </div>
@@ -3268,7 +3256,7 @@ function AdminAuditView({
             filteredLogs.map((log) => (
               <div className="audit-row" key={log.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <span className="audit-icon">🛡️</span>
+                  <span className="audit-icon"><IconAudit size={18} /></span>
                   <div>
                     <b>{auditEventLabel(log.type)}: {log.subject}</b>
                     <small>{log.detail}</small>
@@ -3379,7 +3367,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
   {
     id: 'multiSelect',
     icon: '☑',
-    title: 'Selección Múltiple',
+    title: 'Selección de Opción Múltiple',
     subtitle: 'Múltiples respuestas correctas',
     status: 'upcoming',
     badge: 'Próximamente',
@@ -3414,11 +3402,33 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     icon: '▦',
     title: 'Matriz de Doble Entrada',
     subtitle: 'Cruce de propiedades multidimensional',
-    status: 'upcoming',
-    badge: 'Próximamente',
+    status: 'active',
+    badge: 'Activo · v1.3',
     evaluates: 'Capacidad de comparar simultáneamente varios conceptos bajo múltiples criterios (ej. mitocondria vs cloroplasto vs núcleo).',
     studentExperience: 'Tabla con casillas de verificación en los cruces entre filas y columnas, con feedback granular por propiedad.',
     contentRequirements: 'Matriz de filas (elementos), columnas (características) y asignaciones booleanas esperadas.',
+  },
+  {
+    id: 'vennDiagram',
+    icon: '◫',
+    title: 'Diagrama de Venn',
+    subtitle: 'Comparación y contraste con intersección central',
+    status: 'active',
+    badge: 'Activo · v1.3',
+    evaluates: 'Discriminación conceptual profunda: discernir qué atributos pertenecen exclusivamente a un concepto o al otro, y cuáles son compartidos en la intersección.',
+    studentExperience: 'Dos conjuntos superpuestos con zona central interactiva. El estudiante clasifica conceptos del banco en Solo A, Ambos o Solo B mediante toques directos.',
+    contentRequirements: 'Dos conceptos de contraste, sus características exclusivas y al menos un elemento o propiedad compartida en común.',
+  },
+  {
+    id: 'shortAnswer',
+    icon: '✍',
+    title: 'Respuesta Corta Conceptual',
+    subtitle: 'Evocación activa directa sin alternativas visibles',
+    status: 'active',
+    badge: 'Activo · v1.3',
+    evaluates: 'Recuperación activa de la memoria (Recall) y precisión terminológica: el estudiante debe formular la respuesta exacta en lugar de reconocerla pasivamente entre opciones.',
+    studentExperience: 'Campo de texto limpio con teclado accesible. Al responder, el estudiante recibe retroalimentación formativa y comprobante de respuesta.',
+    contentRequirements: 'Pregunta concreta e inequívoca con al menos una respuesta válida y sus posibles sinónimos o variantes léxicas autorizadas.',
   },
   {
     id: 'subcategories',
@@ -4248,6 +4258,77 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
+  // 12. DIAGRAMA DE VENN (VENN DIAGRAM) v1.3
+  if (matches.vennDiagram?.available && (categories.length >= 2 || concepts.length >= 2)) {
+    const setA = categories[0] || concepts[0]?.name || 'Concepto A'
+    const setB = categories[1] || concepts[1]?.name || 'Concepto B'
+    const prompt = `Analiza las siguientes afirmaciones o características y ubícalas en "${setA}", en "${setB}" o en su intersección ("Ambos"):`
+    const hint = 'Distingue las características exclusivas de cada concepto de las propiedades compartidas por ambos.'
+    const explanation = `Contraste y puntos de convergencia entre ${setA} y ${setB}.`
+    const items: VennItem[] = [
+      { id: makeEditorId('vitem-'), label: `Característica exclusiva de ${setA}`, zone: 'left' },
+      { id: makeEditorId('vitem-'), label: `Propiedad compartida por ${setA} y ${setB}`, zone: 'both' },
+      { id: makeEditorId('vitem-'), label: `Característica exclusiva de ${setB}`, zone: 'right' },
+    ]
+    activities.push({
+      id: `act-${Date.now()}-venn`,
+      templateId: template.id,
+      title: `${template.title} · Diagrama de Venn`,
+      type: 'vennDiagram',
+      topic: template.subject,
+      difficulty: template.difficulty,
+      prompt,
+      options: items.map((it) => it.label),
+      answer: items.map((it) => `${it.label} → ${it.zone}`),
+      feedback: hint,
+      details: {
+        vennDiagram: {
+          context: `Comparación y contraste conceptual entre ${setA} y ${setB}.`,
+          setA,
+          setB,
+          intersectionLabel: 'Ambos / Compartido',
+          items,
+          hint,
+          explanation,
+        },
+      },
+      status: 'published',
+    })
+  }
+
+  // 13. RESPUESTA CORTA CONCEPTUAL (SHORT ANSWER) v1.3
+  if (matches.shortAnswer?.available && concepts.length >= 1) {
+    const target = concepts[0]
+    const prompt = `¿A qué concepto o estructura corresponde la siguiente definición: "${target.definition}"?`
+    const hint = `Revisa los conceptos nucleares abordados en ${template.title}.`
+    const explanation = `La definición corresponde exactamente a ${target.name}.`
+    const acceptedAnswers = [target.name, target.name.toLowerCase()]
+    activities.push({
+      id: `act-${Date.now()}-sa`,
+      templateId: template.id,
+      title: `${template.title} · Respuesta Corta`,
+      type: 'shortAnswer',
+      topic: template.subject,
+      difficulty: template.difficulty,
+      prompt,
+      options: acceptedAnswers,
+      answer: acceptedAnswers,
+      feedback: hint,
+      details: {
+        shortAnswer: {
+          prompt,
+          acceptedAnswers,
+          caseSensitive: false,
+          ignoreAccents: true,
+          placeholder: 'Escribe aquí tu respuesta...',
+          hint,
+          explanation,
+        },
+      },
+      status: 'published',
+    })
+  }
+
   return activities
 }
 
@@ -4504,6 +4585,8 @@ type ActivityEditorState = {
   sorting: { context: string; categories: string[]; items: SortingItem[]; hint: string; explanation: string }
   ordering: { context: string; steps: string[]; hint: string; explanation: string }
   scenario: { situation: string; stages: ScenarioStage[]; hint: string; explanation: string }
+  vennDiagram: { context: string; setA: string; setB: string; intersectionLabel: string; items: VennItem[]; hint: string; explanation: string }
+  shortAnswer: { context: string; prompt: string; acceptedAnswers: string[]; caseSensitive: boolean; ignoreAccents: boolean; placeholder: string; hint: string; explanation: string }
 }
 
 function makeEditorId(prefix: string): string {
@@ -4566,6 +4649,31 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
     scenario: {
       situation: firstSituation || template?.description || 'En una situación comunitaria se presentan diferentes posturas sobre cómo abordar una problemática compartida.',
       stages: [{ id: makeEditorId('stage-'), title: 'Decisión principal', prompt: situation?.decision || template?.objective || '¿Qué acción debe tomarse primero?', options: scenarioOptions }],
+      hint: '',
+      explanation: '',
+    },
+    // Diagrama de Venn v1.3: dos conceptos en contraste, intersección central, items balanceados, pista obligatoria.
+    vennDiagram: {
+      context: '',
+      setA: categories[0] || (concepts[0]?.name ?? 'Conjunto A'),
+      setB: categories[1] || (concepts[1]?.name ?? 'Conjunto B'),
+      intersectionLabel: 'Ambos',
+      items: [
+        { id: makeEditorId('vitem-'), label: 'Característica distintiva de ' + (categories[0] || concepts[0]?.name || 'Conjunto A'), zone: 'left' },
+        { id: makeEditorId('vitem-'), label: 'Propiedad compartida por ambos conceptos', zone: 'both' },
+        { id: makeEditorId('vitem-'), label: 'Característica distintiva de ' + (categories[1] || concepts[1]?.name || 'Conjunto B'), zone: 'right' },
+      ],
+      hint: '',
+      explanation: '',
+    },
+    // Respuesta Corta v1.3: evocación activa, variantes aceptadas y tolerancia a tildes/mayúsculas.
+    shortAnswer: {
+      context: '',
+      prompt: completeConcepts[0] ? `¿A qué concepto corresponde la definición: "${completeConcepts[0].definition}"?` : 'Escribe aquí la pregunta de respuesta corta:',
+      acceptedAnswers: completeConcepts[0] ? [completeConcepts[0].name] : ['Término clave'],
+      caseSensitive: false,
+      ignoreAccents: true,
+      placeholder: 'Escribe tu respuesta aquí...',
       hint: '',
       explanation: '',
     },
@@ -4671,6 +4779,40 @@ function activityToEditorState(activity: Activity, template?: EvaluationTemplate
       },
     }
   }
+  if (activity.type === 'vennDiagram') {
+    const vd = d?.vennDiagram
+    return {
+      ...base,
+      vennDiagram: {
+        context: vd?.context || '',
+        setA: vd?.setA || base.vennDiagram.setA,
+        setB: vd?.setB || base.vennDiagram.setB,
+        intersectionLabel: vd?.intersectionLabel || 'Ambos',
+        items: vd?.items && vd.items.length ? vd.items : base.vennDiagram.items,
+        hint: vd?.hint || activity.feedback || '',
+        explanation: vd?.explanation || '',
+      },
+    }
+  }
+  if (activity.type === 'shortAnswer') {
+    const sa = d?.shortAnswer
+    const acceptedAnswers = sa?.acceptedAnswers && sa.acceptedAnswers.length
+      ? sa.acceptedAnswers
+      : (Array.isArray(activity.answer) ? activity.answer : [String(activity.answer || 'Respuesta')])
+    return {
+      ...base,
+      shortAnswer: {
+        context: sa?.context || '',
+        prompt: sa?.prompt || activity.prompt || '',
+        acceptedAnswers,
+        caseSensitive: sa?.caseSensitive === true,
+        ignoreAccents: sa?.ignoreAccents !== false,
+        placeholder: sa?.placeholder || 'Escribe tu respuesta aquí...',
+        hint: sa?.hint || activity.feedback || '',
+        explanation: sa?.explanation || '',
+      },
+    }
+  }
   return base
 }
 
@@ -4683,6 +4825,14 @@ function validateActivityEditor(type: ActivityType, title: string, prompt: strin
   if (type === 'sorting') { const issue = validateSortingDefinition(sortingEditorToDefinition(prompt, value.sorting))[0]; if (issue) return sortingIssueMessage(issue.path, issue.message) }
   if (type === 'ordering') { const issue = validateOrderingDefinition(orderingEditorToDefinition(prompt, value.ordering))[0]; if (issue) return orderingIssueMessage(issue.path, issue.message) }
   if (type === 'scenario') { const issue = validateScenarioDefinition(scenarioEditorToDefinition(prompt, value.scenario))[0]; if (issue) return scenarioIssueMessage(issue.path, issue.message) }
+  if (type === 'vennDiagram') {
+    const result = validateVennDiagramActivity(vennDiagramEditorToDefinition(prompt, value.vennDiagram))
+    if (!result.valid && result.errors.length) return result.errors[0]
+  }
+  if (type === 'shortAnswer') {
+    const result = validateShortAnswerActivity(shortAnswerEditorToDefinition(prompt, value.shortAnswer))
+    if (!result.valid && result.errors.length) return result.errors[0]
+  }
   return ''
 }
 
@@ -4749,6 +4899,64 @@ function editorStateToActivity(type: ActivityType, value: ActivityEditorState, c
           stages: cleanStages,
           hint: sc.hint.trim(),
           explanation: sc.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'vennDiagram') {
+    const vd = value.vennDiagram
+    const cleanItems = vd.items.map((it: VennItem) => ({ id: it.id, label: it.label.trim(), zone: it.zone }))
+    const options = cleanItems.map((it: { id: string; label: string; zone: VennZone }) => it.label)
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options,
+      answer: cleanItems.map((it: { id: string; label: string; zone: VennZone }) => `${it.label} → ${it.zone}`),
+      feedback: vd.hint.trim(),
+      details: {
+        vennDiagram: {
+          setA: vd.setA.trim(),
+          setB: vd.setB.trim(),
+          intersectionLabel: vd.intersectionLabel.trim() || 'Ambos',
+          items: cleanItems,
+          context: vd.context.trim() || undefined,
+          hint: vd.hint.trim(),
+          explanation: vd.explanation.trim() || undefined,
+        },
+      },
+      status: 'published',
+    }
+  }
+  if (type === 'shortAnswer') {
+    const sa = value.shortAnswer
+    const cleanAnswers = sa.acceptedAnswers.map((a: string) => a.trim()).filter(Boolean)
+    return {
+      id: '',
+      templateId: common.templateId,
+      title: common.title,
+      type,
+      topic: common.topic,
+      difficulty: common.difficulty,
+      prompt: common.prompt,
+      options: cleanAnswers,
+      answer: cleanAnswers,
+      feedback: sa.hint.trim(),
+      details: {
+        shortAnswer: {
+          prompt: common.prompt.trim(),
+          acceptedAnswers: cleanAnswers,
+          caseSensitive: sa.caseSensitive,
+          ignoreAccents: sa.ignoreAccents,
+          placeholder: sa.placeholder.trim() || 'Escribe tu respuesta aquí...',
+          context: sa.context.trim() || undefined,
+          hint: sa.hint.trim(),
+          explanation: sa.explanation.trim() || undefined,
         },
       },
       status: 'published',
@@ -5192,12 +5400,383 @@ function singleChoiceIssueMessage(path: string, message: string): string {
   return (field[path] ?? path) + ': ' + message
 }
 
+function vennDiagramEditorToDefinition(prompt: string, value: ActivityEditorState['vennDiagram']) {
+  return {
+    type: 'vennDiagram' as const,
+    id: 'editor',
+    prompt,
+    setA: value.setA,
+    setB: value.setB,
+    intersectionLabel: value.intersectionLabel,
+    items: value.items,
+    hint: value.hint,
+    ...(value.context.trim() ? { context: value.context } : {}),
+    ...(value.explanation.trim() ? { explanation: value.explanation } : {}),
+  }
+}
+
+function vennDiagramIssueMessage(path: string, message: string): string {
+  const field: Record<string, string> = {
+    prompt: 'Consigna general',
+    setA: 'Nombre del Conjunto A',
+    setB: 'Nombre del Conjunto B',
+    intersectionLabel: 'Etiqueta de Intersección',
+    items: 'Elementos del diagrama',
+    hint: 'Pista orientadora',
+    context: 'Contexto',
+    explanation: 'Explicación privada',
+  }
+  if (path.startsWith('items[')) return message
+  return (field[path] ?? path) + ': ' + message
+}
+
+function VennDiagramEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['vennDiagram']
+  onChange: (value: ActivityEditorState['vennDiagram']) => void
+}) {
+  const updateItem = (id: string, patch: Partial<VennItem>) => {
+    onChange({
+      ...value,
+      items: value.items.map((it: VennItem) => (it.id === id ? { ...it, ...patch } : it)),
+    })
+  }
+
+  const addItem = () => {
+    if (value.items.length >= VENN_DIAGRAM_LIMITS.maxItems) return
+    const nextZone: VennZone = value.items.length % 3 === 0 ? 'left' : value.items.length % 3 === 1 ? 'both' : 'right'
+    onChange({
+      ...value,
+      items: [
+        ...value.items,
+        { id: makeEditorId('vitem-'), label: '', zone: nextZone },
+      ],
+    })
+  }
+
+  const removeItem = (id: string) => {
+    if (value.items.length <= VENN_DIAGRAM_LIMITS.minItems) return
+    onChange({
+      ...value,
+      items: value.items.filter((it: VennItem) => it.id !== id),
+    })
+  }
+
+  const countLeft = value.items.filter((it: VennItem) => it.zone === 'left').length
+  const countBoth = value.items.filter((it: VennItem) => it.zone === 'both').length
+  const countRight = value.items.filter((it: VennItem) => it.zone === 'right').length
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE DIAGRAMA DE VENN</p>
+          <b>Comparación y contraste con intersección central</b>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addItem}
+          disabled={value.items.length >= VENN_DIAGRAM_LIMITS.maxItems}
+        >
+          ＋ Agregar concepto
+        </button>
+      </div>
+
+      <label>
+        Contexto o presentación del caso (opcional)
+        <textarea
+          rows={2}
+          maxLength={300}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Ej: Análisis comparativo entre células procariotas y eucariotas en el taller de microbiología."
+        />
+      </label>
+
+      <div className="form-grid">
+        <label>
+          Nombre del Conjunto A (Izquierda) *
+          <input
+            maxLength={VENN_DIAGRAM_LIMITS.maxSetNameLength}
+            value={value.setA}
+            onChange={(e) => onChange({ ...value, setA: e.target.value })}
+            placeholder="Ej: Célula Animal"
+          />
+        </label>
+        <label>
+          Nombre del Conjunto B (Derecha) *
+          <input
+            maxLength={VENN_DIAGRAM_LIMITS.maxSetNameLength}
+            value={value.setB}
+            onChange={(e) => onChange({ ...value, setB: e.target.value })}
+            placeholder="Ej: Célula Vegetal"
+          />
+        </label>
+      </div>
+
+      <label>
+        Etiqueta de la Intersección (opcional)
+        <input
+          maxLength={VENN_DIAGRAM_LIMITS.maxSetNameLength}
+          value={value.intersectionLabel}
+          onChange={(e) => onChange({ ...value, intersectionLabel: e.target.value })}
+          placeholder="Ambos / Compartido"
+        />
+      </label>
+
+      <div className="venn-editor-balance-bar">
+        <b>Distribución de elementos:</b>
+        <span className={`badge-pill ${countLeft > 0 ? 'badge-ok' : 'badge-warn'}`}>
+          {value.setA || 'Conjunto A'}: {countLeft}
+        </span>
+        <span className={`badge-pill ${countBoth > 0 ? 'badge-ok' : 'badge-warn'}`}>
+          {value.intersectionLabel || 'Ambos'}: {countBoth}
+        </span>
+        <span className={`badge-pill ${countRight > 0 ? 'badge-ok' : 'badge-warn'}`}>
+          {value.setB || 'Conjunto B'}: {countRight}
+        </span>
+      </div>
+
+      <p className="editor-help">
+        Define entre 3 y 8 elementos. Es obligatorio asignar al menos un elemento a la intersección ("Ambos") y al menos uno a las zonas exclusivas.
+      </p>
+
+      <div className="editor-options">
+        {value.items.map((item: VennItem, index: number) => (
+          <div className="editor-option venn-item-editor" key={item.id}>
+            <div className="editor-card-head">
+              <b>Elemento {index + 1}</b>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => removeItem(item.id)}
+                disabled={value.items.length <= VENN_DIAGRAM_LIMITS.minItems}
+                aria-label="Eliminar elemento"
+              >
+                ×
+              </button>
+            </div>
+            <div className="venn-item-line">
+              <input
+                maxLength={VENN_DIAGRAM_LIMITS.maxItemLabelLength}
+                value={item.label}
+                onChange={(e) => updateItem(item.id, { label: e.target.value })}
+                placeholder="Texto o rasgo del elemento"
+              />
+              <div className="venn-zone-selector">
+                <button
+                  type="button"
+                  className={`venn-zone-btn ${item.zone === 'left' ? 'is-active-left' : ''}`}
+                  onClick={() => updateItem(item.id, { zone: 'left' })}
+                >
+                  Solo {value.setA || 'A'}
+                </button>
+                <button
+                  type="button"
+                  className={`venn-zone-btn ${item.zone === 'both' ? 'is-active-both' : ''}`}
+                  onClick={() => updateItem(item.id, { zone: 'both' })}
+                >
+                  {value.intersectionLabel || 'Ambos'}
+                </button>
+                <button
+                  type="button"
+                  className={`venn-zone-btn ${item.zone === 'right' ? 'is-active-right' : ''}`}
+                  onClick={() => updateItem(item.id, { zone: 'right' })}
+                >
+                  Solo {value.setB || 'B'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={VENN_DIAGRAM_LIMITS.maxHintLength}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista pedagógica que induce a la reflexión sin decir la clave directamente."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={VENN_DIAGRAM_LIMITS.maxExplanationLength}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Fundamentación académica de las diferencias y semejanzas. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
+function shortAnswerEditorToDefinition(prompt: string, value: ActivityEditorState['shortAnswer']) {
+  return {
+    type: 'shortAnswer' as const,
+    id: 'editor',
+    prompt,
+    acceptedAnswers: value.acceptedAnswers,
+    caseSensitive: value.caseSensitive,
+    ignoreAccents: value.ignoreAccents,
+    placeholder: value.placeholder,
+    hint: value.hint,
+    ...(value.context.trim() ? { context: value.context } : {}),
+    ...(value.explanation.trim() ? { explanation: value.explanation } : {}),
+  }
+}
+
+function ShortAnswerEditor({
+  value,
+  onChange,
+}: {
+  value: ActivityEditorState['shortAnswer']
+  onChange: (value: ActivityEditorState['shortAnswer']) => void
+}) {
+  const updateAnswer = (index: number, text: string) => {
+    const updated = [...value.acceptedAnswers]
+    updated[index] = text
+    onChange({ ...value, acceptedAnswers: updated })
+  }
+
+  const addAnswer = () => {
+    if (value.acceptedAnswers.length >= SHORT_ANSWER_LIMITS.maxAcceptedAnswers) return
+    onChange({ ...value, acceptedAnswers: [...value.acceptedAnswers, ''] })
+  }
+
+  const removeAnswer = (index: number) => {
+    if (value.acceptedAnswers.length <= SHORT_ANSWER_LIMITS.minAcceptedAnswers) return
+    onChange({ ...value, acceptedAnswers: value.acceptedAnswers.filter((_, i) => i !== index) })
+  }
+
+  return (
+    <section className="editor-section">
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">EDITOR DE RESPUESTA CORTA CONCEPTUAL</p>
+          <b>Evocación directa desde la memoria sin opciones visibles</b>
+        </div>
+        <button
+          type="button"
+          className="text-button"
+          onClick={addAnswer}
+          disabled={value.acceptedAnswers.length >= SHORT_ANSWER_LIMITS.maxAcceptedAnswers}
+        >
+          ＋ Agregar sinónimo o variante
+        </button>
+      </div>
+
+      <label>
+        Contexto o situación previa (opcional)
+        <textarea
+          rows={2}
+          maxLength={300}
+          value={value.context}
+          onChange={(e) => onChange({ ...value, context: e.target.value })}
+          placeholder="Situación previa, fragmento o caso que contextualiza la pregunta."
+        />
+      </label>
+
+      <div className="form-grid">
+        <label>
+          Texto de ayuda en el campo (placeholder)
+          <input
+            value={value.placeholder}
+            onChange={(e) => onChange({ ...value, placeholder: e.target.value })}
+            placeholder="Ej: Escribe aquí el nombre del orgánulo..."
+          />
+        </label>
+      </div>
+
+      <div className="short-answer-tolerances">
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={value.ignoreAccents}
+            onChange={(e) => onChange({ ...value, ignoreAccents: e.target.checked })}
+          />
+          <b>Tolerar tildes</b> (recomendado: acepta "celula" tanto como "célula")
+        </label>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={value.caseSensitive}
+            onChange={(e) => onChange({ ...value, caseSensitive: e.target.checked })}
+          />
+          <b>Distinguir mayúsculas / minúsculas</b> (solo si es una sigla como ADN o símbolo químico)
+        </label>
+      </div>
+
+      <p className="editor-help">
+        Define entre 1 y 6 respuestas o variantes correctas. Si el estudiante escribe cualquiera de ellas, se considerará acierto.
+      </p>
+
+      <div className="editor-options">
+        {value.acceptedAnswers.map((ans: string, index: number) => (
+          <div className="editor-option short-answer-item-editor" key={index}>
+            <div className="editor-card-head">
+              <b>{index === 0 ? 'Respuesta canónica (principal) *' : `Variante / Sinónimo aceptado #${index + 1}`}</b>
+              <button
+                type="button"
+                className="remove-button"
+                onClick={() => removeAnswer(index)}
+                disabled={value.acceptedAnswers.length <= SHORT_ANSWER_LIMITS.minAcceptedAnswers}
+                aria-label="Eliminar variante"
+              >
+                ×
+              </button>
+            </div>
+            <input
+              maxLength={SHORT_ANSWER_LIMITS.maxAnswerLength}
+              value={ans}
+              onChange={(e) => updateAnswer(index, e.target.value)}
+              placeholder={index === 0 ? "Ej: Mitocondria" : "Ej: Las mitocondrias"}
+            />
+          </div>
+        ))}
+      </div>
+
+      <label>
+        Pista orientadora para el estudiante *
+        <textarea
+          rows={2}
+          maxLength={SHORT_ANSWER_LIMITS.maxHintLength}
+          value={value.hint}
+          onChange={(e) => onChange({ ...value, hint: e.target.value })}
+          placeholder="Pista formativa que induce a la reflexión sin decir directamente la palabra clave."
+        />
+      </label>
+
+      <label>
+        Explicación privada del docente (opcional)
+        <textarea
+          rows={2}
+          maxLength={SHORT_ANSWER_LIMITS.maxExplanationLength}
+          value={value.explanation}
+          onChange={(e) => onChange({ ...value, explanation: e.target.value })}
+          placeholder="Justificación del concepto. Solo visible en reportes docentes y CSV."
+        />
+      </label>
+    </section>
+  )
+}
+
 function SpecificActivityEditor({ type, value, onChange }: { type: ActivityType; value: ActivityEditorState; onChange: (value: ActivityEditorState) => void }) {
   if (type === 'trueFalse') return <TrueFalseEditor value={value.trueFalse} onChange={(trueFalse) => onChange({ ...value, trueFalse })} />
   if (type === 'singleChoice') return <SingleChoiceEditor value={value.singleChoice} onChange={(singleChoice) => onChange({ ...value, singleChoice })} />
   if (type === 'matching') return <MatchingEditor value={value.matching} onChange={(matching) => onChange({ ...value, matching })} />
   if (type === 'sorting') return <SortingEditor value={value.sorting} onChange={(sorting) => onChange({ ...value, sorting })} />
   if (type === 'ordering') return <OrderingEditor value={value.ordering} onChange={(ordering) => onChange({ ...value, ordering })} />
+  if (type === 'vennDiagram') return <VennDiagramEditor value={value.vennDiagram} onChange={(vennDiagram) => onChange({ ...value, vennDiagram })} />
+  if (type === 'shortAnswer') return <ShortAnswerEditor value={value.shortAnswer} onChange={(shortAnswer) => onChange({ ...value, shortAnswer })} />
   return <ScenarioEditor value={value.scenario} onChange={(scenario) => onChange({ ...value, scenario })} />
 }
 
@@ -6057,6 +6636,84 @@ function generateExamHtmlDocument({
                     : '<small style="color:#94a3b8; font-style:italic;">(Ningún elemento asignado)</small>'}
                 </div>
               `).join('')}
+            </div>
+          `
+        }
+      } else if (act.type === 'shortAnswer') {
+        const sa = act.details?.shortAnswer
+        const placeholder = sa?.placeholder || 'Escribe tu respuesta aquí...'
+        if (!isStudent) {
+          answerBodyHtml = `
+            <div class="exam-subtext">Escribe con claridad y precisión el término o concepto correspondiente:</div>
+            <div style="margin-top:10px; padding:12px; border:1px dashed #94a3b8; border-radius:6px; background:#f8fafc;">
+              <span style="color:#64748b; font-size:12px;">Respuesta: </span>
+              <span style="display:inline-block; border-bottom:1.5px solid #334155; width:80%; height:18px;"></span>
+            </div>
+          `
+        } else {
+          const studentVal = structuredResp && structuredResp.type === 'shortAnswer' ? structuredResp.value : rawResponse
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Respuesta escrita por el estudiante:</div>
+            <div class="choice-row choice-selected" style="margin-top:8px; font-size:14px; padding:10px 14px;">
+              ✍ <b>${escapeHtml(studentVal || '(Sin respuesta escrita)')}</b>
+            </div>
+          `
+        }
+      } else if (act.type === 'vennDiagram') {
+        const vd = act.details?.vennDiagram
+        const setA = vd?.setA || 'Conjunto A'
+        const setB = vd?.setB || 'Conjunto B'
+        const inter = vd?.intersectionLabel || 'Ambos'
+        const items = vd?.items || []
+
+        if (!isStudent) {
+          answerBodyHtml = `
+            <div class="exam-subtext">Clasifica cada concepto marcando con una cruz la casilla que corresponda (Solo A, Ambos o Solo B):</div>
+            <table class="exam-table" style="width:100%; border-collapse:collapse; margin-top:8px;">
+              <thead>
+                <tr style="background:#f1f5f9; text-align:left;">
+                  <th style="padding:6px 10px; border:1px solid #cbd5e1;">Concepto / Característica</th>
+                  <th style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center; width:120px;">Solo ${escapeHtml(setA)}</th>
+                  <th style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center; width:120px;">${escapeHtml(inter)}</th>
+                  <th style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center; width:120px;">Solo ${escapeHtml(setB)}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items.map((it) => `
+                  <tr>
+                    <td style="padding:6px 10px; border:1px solid #cbd5e1;">${escapeHtml(it.label)}</td>
+                    <td style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center;">( &nbsp;&nbsp; )</td>
+                    <td style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center;">( &nbsp;&nbsp; )</td>
+                    <td style="padding:6px 10px; border:1px solid #cbd5e1; text-align:center;">( &nbsp;&nbsp; )</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `
+        } else {
+          const assignments: Record<string, VennZone> = structuredResp && structuredResp.type === 'vennDiagram'
+            ? structuredResp.assignments
+            : {}
+
+          const leftAssigned = items.filter((it) => assignments[it.id] === 'left')
+          const bothAssigned = items.filter((it) => assignments[it.id] === 'both')
+          const rightAssigned = items.filter((it) => assignments[it.id] === 'right')
+
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Clasificación entregada en el Diagrama de Venn:</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:8px;">
+              <div style="border:1px solid #93c5fd; background:#eff6ff; border-radius:6px; padding:8px;">
+                <b style="color:#1e40af; font-size:12px; display:block; margin-bottom:4px;">Solo ${escapeHtml(setA)}</b>
+                ${leftAssigned.length ? leftAssigned.map((it) => `<div style="font-size:11px; margin-bottom:2px;">• ${escapeHtml(it.label)}</div>`).join('') : '<small style="color:#94a3b8; font-style:italic;">(Ninguno)</small>'}
+              </div>
+              <div style="border:1px solid #c4b5fd; background:#f5f3ff; border-radius:6px; padding:8px;">
+                <b style="color:#5b21b6; font-size:12px; display:block; margin-bottom:4px;">${escapeHtml(inter)}</b>
+                ${bothAssigned.length ? bothAssigned.map((it) => `<div style="font-size:11px; margin-bottom:2px;">• ${escapeHtml(it.label)}</div>`).join('') : '<small style="color:#94a3b8; font-style:italic;">(Ninguno)</small>'}
+              </div>
+              <div style="border:1px solid #86efac; background:#f0fdf4; border-radius:6px; padding:8px;">
+                <b style="color:#166534; font-size:12px; display:block; margin-bottom:4px;">Solo ${escapeHtml(setB)}</b>
+                ${rightAssigned.length ? rightAssigned.map((it) => `<div style="font-size:11px; margin-bottom:2px;">• ${escapeHtml(it.label)}</div>`).join('') : '<small style="color:#94a3b8; font-style:italic;">(Ninguno)</small>'}
+              </div>
             </div>
           `
         }
@@ -8248,6 +8905,20 @@ function PlayView({
               disabled={submitted}
               onChange={(assignments) => setDraftResponse({ type: 'sorting', assignments })}
             />
+          ) : item.type === 'shortAnswer' && draftResponse.type === 'shortAnswer' ? (
+            <ShortAnswerQuestion
+              runtime={runtime.shortAnswer}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(value) => setDraftResponse({ type: 'shortAnswer', value })}
+            />
+          ) : item.type === 'vennDiagram' && draftResponse.type === 'vennDiagram' ? (
+            <VennDiagramQuestion
+              runtime={runtime.vennDiagram}
+              response={draftResponse}
+              disabled={submitted}
+              onChange={(assignments) => setDraftResponse({ type: 'vennDiagram', assignments })}
+            />
           ) : item.type === 'ordering' && draftResponse.type === 'ordering' ? (
             <OrderingQuestion
               runtime={runtime.ordering}
@@ -8296,6 +8967,10 @@ function PlayView({
                 <p>{runtime.matching.hint ?? item.feedback}</p>
               ) : item.type === 'sorting' ? (
                 <p>{runtime.sorting.hint ?? item.feedback}</p>
+              ) : item.type === 'shortAnswer' ? (
+                <p>{runtime.shortAnswer.hint ?? item.feedback}</p>
+              ) : item.type === 'vennDiagram' ? (
+                <p>{runtime.vennDiagram.hint ?? item.feedback}</p>
               ) : item.type === 'ordering' ? (
                 <p>{runtime.ordering.hint ?? item.feedback}</p>
               ) : item.type === 'scenario' ? (
@@ -8698,6 +9373,207 @@ function OrderingQuestion({ runtime, response, disabled, onChange }: { runtime: 
         ))}
       </div>
       <small className="ordering-source">{runtime.steps.length} pasos en total</small>
+    </div>
+  )
+}
+
+function VennDiagramQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['vennDiagram']>
+  response: Extract<ActivityResponse, { type: 'vennDiagram' }>
+  disabled: boolean
+  onChange: (assignments: Record<string, VennZone>) => void
+}) {
+  const assignments = response.assignments || {}
+  const setA = runtime.setA || 'Conjunto A'
+  const setB = runtime.setB || 'Conjunto B'
+  const intersectionLabel = runtime.intersectionLabel || 'Ambos'
+  const items = runtime.items || []
+
+  const toggleZone = (itemId: string, targetZone: VennZone) => {
+    if (disabled) return
+    const currentZone = assignments[itemId]
+    const nextAssignments = { ...assignments }
+    if (currentZone === targetZone) {
+      delete nextAssignments[itemId]
+    } else {
+      nextAssignments[itemId] = targetZone
+    }
+    onChange(nextAssignments)
+  }
+
+  const leftItems = items.filter((it) => assignments[it.id] === 'left')
+  const bothItems = items.filter((it) => assignments[it.id] === 'both')
+  const rightItems = items.filter((it) => assignments[it.id] === 'right')
+
+  const totalAssigned = Object.keys(assignments).length
+
+  return (
+    <div className="venn-diagram-container">
+      {/* 1. Tablero Visual del Diagrama de Venn */}
+      <div className="venn-diagram-board">
+        <div className="venn-zone-card venn-zone-left">
+          <div className="venn-zone-head">
+            <span className="venn-zone-badge venn-badge-left">Solo A</span>
+            <span className="venn-zone-title">{setA}</span>
+            <span className="venn-zone-count">({leftItems.length})</span>
+          </div>
+          <div className="venn-zone-chips">
+            {leftItems.length === 0 ? (
+              <span className="venn-empty-zone">Sin elementos asignados</span>
+            ) : (
+              leftItems.map((it) => (
+                <span key={it.id} className="venn-chip venn-chip-left">
+                  {it.label}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="venn-zone-card venn-zone-both">
+          <div className="venn-zone-head">
+            <span className="venn-zone-badge venn-badge-both">Intersección</span>
+            <span className="venn-zone-title">{intersectionLabel}</span>
+            <span className="venn-zone-count">({bothItems.length})</span>
+          </div>
+          <div className="venn-zone-chips">
+            {bothItems.length === 0 ? (
+              <span className="venn-empty-zone">Propiedades compartidas</span>
+            ) : (
+              bothItems.map((it) => (
+                <span key={it.id} className="venn-chip venn-chip-both">
+                  {it.label}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="venn-zone-card venn-zone-right">
+          <div className="venn-zone-head">
+            <span className="venn-zone-badge venn-badge-right">Solo B</span>
+            <span className="venn-zone-title">{setB}</span>
+            <span className="venn-zone-count">({rightItems.length})</span>
+          </div>
+          <div className="venn-zone-chips">
+            {rightItems.length === 0 ? (
+              <span className="venn-empty-zone">Sin elementos asignados</span>
+            ) : (
+              rightItems.map((it) => (
+                <span key={it.id} className="venn-chip venn-chip-right">
+                  {it.label}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="venn-instruction-bar">
+        <span>Toca una opción para asignar cada elemento. Si vuelves a tocar la misma opción, se desmarca:</span>
+        <span className="venn-progress-badge">{totalAssigned} de {items.length} asignados</span>
+      </div>
+
+      {/* 2. Banco interactivo de conceptos con botones táctiles */}
+      <div className="venn-concept-list">
+        {items.map((item, idx) => {
+          const activeZone = assignments[item.id]
+          return (
+            <div key={item.id} className={`venn-concept-card ${activeZone ? 'is-assigned' : ''}`}>
+              <div className="venn-concept-meta">
+                <span className="venn-concept-index">{idx + 1}</span>
+                <span className="venn-concept-label">{item.label}</span>
+              </div>
+              <div className="venn-buttons-row">
+                <button
+                  type="button"
+                  className={`venn-btn-choice venn-btn-left ${activeZone === 'left' ? 'is-active' : ''}`}
+                  onClick={() => toggleZone(item.id, 'left')}
+                  disabled={disabled}
+                  title={`Asignar solo a ${setA}`}
+                >
+                  <span className="venn-btn-indicator">{activeZone === 'left' ? '●' : '○'}</span>
+                  <span>Solo {setA}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`venn-btn-choice venn-btn-both ${activeZone === 'both' ? 'is-active' : ''}`}
+                  onClick={() => toggleZone(item.id, 'both')}
+                  disabled={disabled}
+                  title="Asignar a ambos (intersección)"
+                >
+                  <span className="venn-btn-indicator">{activeZone === 'both' ? '●' : '○'}</span>
+                  <span>{intersectionLabel}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`venn-btn-choice venn-btn-right ${activeZone === 'right' ? 'is-active' : ''}`}
+                  onClick={() => toggleZone(item.id, 'right')}
+                  disabled={disabled}
+                  title={`Asignar solo a ${setB}`}
+                >
+                  <span className="venn-btn-indicator">{activeZone === 'right' ? '●' : '○'}</span>
+                  <span>Solo {setB}</span>
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ShortAnswerQuestion({
+  runtime,
+  response,
+  disabled,
+  onChange,
+}: {
+  runtime: NonNullable<ActivityDetails['shortAnswer']>
+  response: Extract<ActivityResponse, { type: 'shortAnswer' }>
+  disabled: boolean
+  onChange: (value: string) => void
+}) {
+  const value = response.value || ''
+  const placeholder = runtime.placeholder || 'Escribe tu respuesta aquí...'
+
+  return (
+    <div className="short-answer-container">
+      <div className="short-answer-input-box">
+        <input
+          type="text"
+          className="short-answer-input"
+          value={value}
+          onChange={(e) => !disabled && onChange(e.target.value)}
+          disabled={disabled}
+          placeholder={placeholder}
+          maxLength={80}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck="false"
+        />
+        {value && !disabled && (
+          <button
+            type="button"
+            className="short-answer-clear-btn"
+            onClick={() => onChange('')}
+            title="Borrar texto"
+            aria-label="Borrar texto"
+          >
+            ×
+          </button>
+        )}
+      </div>
+      <div className="short-answer-counter-bar">
+        <span>{value.trim().length > 0 ? '✓ Respuesta ingresada' : 'Escribe tu respuesta con el teclado'}</span>
+        <span className="short-answer-char-count">{value.length} / 80 caracteres</span>
+      </div>
     </div>
   )
 }

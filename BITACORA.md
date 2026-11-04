@@ -1225,6 +1225,22 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
   - `npm.cmd run test`: **18 suites pasadas, 127/127 pruebas aprobadas** (100% éxito).
   - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción Vite exitosos en 437ms.
 
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #7: `multiSelect` (Selección de Opción Múltiple) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #7 de 21: `multiSelect`)** — Desarrollo 100% local sin alterar la versión web publicada.
+- **Decisiones pedagógicas y de diseño cerradas con el usuario:**
+  - Entre **3 y 6 opciones** únicas por pregunta (`minOptions: 3`, `maxOptions: 6`).
+  - Al menos **2 opciones correctas (`correct: true`)** y al menos **1 distractor (`correct: false`)**. Ninguna opción viene marcada por defecto en el editor manual.
+  - **Calificación por coincidencia exacta** (seleccionar el 100% de las opciones correctas y 0 opciones incorrectas otorga el puntaje completo; cualquier selección parcial o inclusión de distractores otorga 0 puntos), homologada con `matching`, `sorting` y `ordering`.
+  - **Sin inducir la cantidad de respuestas correctas:** la proyección pública y la vista estudiantil indican únicamente *"Selecciona todas las opciones correctas"* sin revelar jamás cuántas opciones son verdaderas.
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/multiSelect.ts`](src/lib/activities/multiSelect.ts) y [`src/lib/activities/multiSelect.test.ts`](src/lib/activities/multiSelect.test.ts) (9 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/multiSelectIntegration.test.ts`](src/lib/activities/multiSelectIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte completo para `multiSelect` e importación resiliente.
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSV):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconMultiSelect`), [`src/App.tsx`](src/App.tsx) (`MultiSelectEditor`, `MultiSelectQuestion`, `VariantDrilldownModal`, `generateExamHtmlDocument`, `FORMAT_CATALOG`) y [`src/index.css`](src/index.css) (Modo Día y Noche).
+  5. **Capa 5 (Edge Functions Locales):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts).
+  6. **Capa 6 (Verificación Técnica):**
+     - `npm.cmd run test`: **20 suites pasadas, 139/139 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpias en 318ms.
 
 
 
@@ -1234,4 +1250,189 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
 
 
 
+
+
+
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #8: `fillBlanks` (Completar Espacios con Fichas Táctiles) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #8 de 21: `fillBlanks`)** — Desarrollo 100% local sin alterar la versión web publicada.
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Párrafo estructurado (`textWithBlanks`) con marcadores consecutivos `{{1}}`, `{{2}}`, ..., hasta 6 espacios (`minBlanks: 1`, `maxBlanks: 6`).
+  - **Banco cerrado de fichas táctiles (`wordBank`):** elimina ambigüedades ortográficas, tildes o errores de tipeo en pantallas móviles al combinar las respuestas correctas (`blanks`) con `1..6` palabras distractoras (`distractors`) barajadas de forma determinista (`scrambleWordBank`).
+  - **Interacción móvil táctil y escritorio:** permite tocar una ficha del banco y luego tocar el espacio numerado (o arrastrar y soltar en escritorio), y tocar un espacio ocupado para devolver la ficha al banco.
+  - **Calificación por coincidencia exacta:** completar todos los espacios con la palabra exacta en su posición correspondiente otorga el puntaje completo; cualquier espacio incorrecto otorga 0 puntos; todos los espacios vacíos se registran como `omitted`.
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/fillBlanks.ts`](src/lib/activities/fillBlanks.ts) y [`src/lib/activities/fillBlanks.test.ts`](src/lib/activities/fillBlanks.test.ts) (10 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/fillBlanksIntegration.test.ts`](src/lib/activities/fillBlanksIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte completo para `fillBlanks`.
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSV):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconFillBlanks`), [`src/App.tsx`](src/App.tsx) (`FillBlanksEditor`, `FillBlanksQuestion`, `VariantDrilldownModal`, `generateExamHtmlDocument`, `FORMAT_CATALOG`) y [`src/index.css`](src/index.css) (Modo Día y Noche).
+  5. **Capa 5 (Edge Functions Locales):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts).
+  6. **Capa 6 (Verificación Técnica):**
+     - `npm.cmd run test`: **22 suites pasadas, 153/153 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpias en 333ms.
+
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #9: `spotError` (Identificación / Detección del Error) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #9 de 21: `spotError`)** — Desarrollo 100% local sin alterar la versión web publicada.
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Entre **3 y 6 fragmentos, pasos o enunciados** (`segments`) únicos (`minSegments: 3`, `maxSegments: 6`) donde **exactamente 1 fragmento contiene un error conceptual o procedimental (`hasError: true`)**.
+  - Incluye el campo opcional privado `correction` para documentar la formulación correcta del fragmento erróneo (solo visible para el docente y el reporte CSV).
+  - La proyección pública (`toSpotErrorPublic`) elimina `hasError`, `correction` y `explanation`.
+  - **Interacción del estudiante:** Toca el fragmento donde detecta el error (se resalta con insignia de advertencia `⚠️ Señalado con error`) y recibe únicamente la pista orientadora (`hint`).
+  - **Calificación por coincidencia exacta:** Identificar el fragmento con `hasError: true` otorga el puntaje completo; cualquier otro fragmento otorga 0 puntos; sin selección se registra como `omitted`.
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/spotError.ts`](src/lib/activities/spotError.ts) y [`src/lib/activities/spotError.test.ts`](src/lib/activities/spotError.test.ts) (8 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/spotErrorIntegration.test.ts`](src/lib/activities/spotErrorIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte completo para `spotError`.
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSV):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconSpotError`), [`src/App.tsx`](src/App.tsx) (`SpotErrorEditor`, `SpotErrorQuestion`, `VariantDrilldownModal`, `generateExamHtmlDocument`, `FORMAT_CATALOG`) y [`src/index.css`](src/index.css) (Modo Día y Noche).
+  5. **Capa 5 (Edge Functions Locales):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts).
+  6. **Capa 6 (Verificación Técnica):**
+     - `npm.cmd run test`: **24 suites pasadas, 166/166 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpias en 305ms.
+
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #10: `markWords` (Marcar Palabras Clave en el Texto) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #10 de 21: `markWords`)** — Desarrollo 100% local sin alterar la versión web publicada.
+- **Diferencia pedagógica respecto a `spotError`:**
+  - `spotError` (Actividad #9): Auditoría crítica de fragmentos/pasos discretos para hallar **un único enunciado falso o erróneo**.
+  - `markWords` (Actividad #10): Comprensión lectora contextual en un **párrafo fluido** donde el estudiante interactúa con un resaltador táctil para marcar **múltiples términos diana válidos** (conceptos, fuentes, órganos, causas) sin tocar los distractores plausibles del texto.
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Sintaxis de marcado amigable en texto: `[término*]` (con asterisco final) para respuestas correctas y `[término]` (sin asterisco) para distractores.
+  - Entre **3 y 10 términos interactivos** por párrafo (`minWords: 3`, `maxWords: 10`), con al menos **1 correcto** y al menos **1 distractor**.
+  - **Calificación por coincidencia exacta:** El estudiante debe marcar el 100% de los términos correctos y ningún distractor para obtener el puntaje completo; cualquier selección parcial o con distractores otorga 0 puntos; selección vacía se registra como `omitted`.
+  - Proyección pública segura (`toMarkWordsPublic`): oculta `correct`, `explanation` y `sourceRef`; el estudiante recibe únicamente `hint` como retroalimentación orientadora.
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/markWords.ts`](src/lib/activities/markWords.ts) y [`src/lib/activities/markWords.test.ts`](src/lib/activities/markWords.test.ts) (7 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/markWordsIntegration.test.ts`](src/lib/activities/markWordsIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte para importar `markWords` (reconociendo corchetes automáticamente o lista de palabras).
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSV):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconMarkWords`), [`src/App.tsx`](src/App.tsx) (`MarkWordsEditor`, `MarkWordsQuestion`, `VariantDrilldownModal`, `generateExamHtmlDocument`, `FORMAT_CATALOG`) y [`src/index.css`](src/index.css) (Modo Día y Noche con fichas de marcado violeta).
+  5. **Capa 5 (Edge Functions Locales):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) (24 pruebas de servidor aprobadas).
+  6. **Capa 6 (Verificación Técnica):**
+     - `npm.cmd run test`: **26 suites pasadas, 178/178 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpias en 655ms.
+
+
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #11: `gridCheck` (Matriz de Doble Entrada) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #11 de 21: `gridCheck`)** — Desarrollo 100% local sin alterar la versión web publicada.
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Estructura bidimensional con entre **2 y 6 filas** (`rows`) y entre **2 y 5 columnas** (`columns`), con al menos **1 celda esperada activa** (`expectedCells`, identificadas con el formato seguro `rowId:colId`).
+  - **Doble vista adaptativa y táctil:**
+    - En escritorio: Tabla matricial interactiva con botones de celda accesibles y estados seleccionados de alto contraste.
+    - En móviles (`max-width: 640px`): Renderizado automático en tarjetas por fila con fichas/chips táctiles con targets superiores a 44px, eliminando desplazamientos horizontales y dificultades de pulsación en pantallas pequeñas.
+  - **Calificación por coincidencia exacta:** El estudiante debe marcar exactamente el conjunto de celdas válidas `rowId:colId` y ninguna celda distractora para obtener el puntaje completo; cualquier celda faltante o sobrante otorga 0 puntos; sin ninguna celda seleccionada se registra como `omitted`.
+  - Proyección pública segura (`toGridCheckPublic`): oculta `expectedCells`, `explanation` y `sourceRef` en cliente y Edge Functions; el estudiante recibe únicamente `hint` como retroalimentación orientadora.
+  - Soporte completo en impresión tamaño Carta y vales de respuesta del estudiante (`generateExamHtmlDocument`).
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/gridCheck.ts`](src/lib/activities/gridCheck.ts) y [`src/lib/activities/gridCheck.test.ts`](src/lib/activities/gridCheck.test.ts) (9 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/gridCheckIntegration.test.ts`](src/lib/activities/gridCheckIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte para importar `gridCheck` (admitiendo tanto formato `expectedCells: string[]` como objeto `matrix: { [rowId]: string[] }`).
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSV):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconGridCheck`), [`src/App.tsx`](src/App.tsx) (`GridCheckEditor`, `GridCheckQuestion`, `VariantDrilldownModal`, `generateExamHtmlDocument`, `FORMAT_CATALOG`) y [`src/index.css`](src/index.css) (Modo Día y Noche con estilo esmeralda / cian).
+  5. **Capa 5 (Edge Functions Locales):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) (25 pruebas de servidor aprobadas).
+  6. **Capa 6 (Verificación Técnica):**
+     - `npm.cmd run test`: **28 suites pasadas, 192/192 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpias en 1.03s.
+
+
+### Fase 7 (En progreso — 100% Local): Expansión Progresiva hacia las 21 Actividades — Actividad #12: `vennDiagram` (Diagrama de Venn / Comparación y Contraste con Intersección) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #12 de 21: `vennDiagram`)** — Desarrollo 100% local sin alterar la versión web pública ni Supabase remoto.
+- **Diferenciación pedagógica e intencionalidad:**
+  - A diferencia de `sorting` (clasificación mutuamente excluyente) y de `gridCheck` (matriz de propiedades independiente), `vennDiagram` exige la discriminación simultánea de atributos exclusivos de dos polos conceptuales (`setA` y `setB`) frente a elementos compartidos o de síntesis en su intersección central (`both`).
+  - No es una selección única disfrazada: evalúa el contraste estructural entre dos fenómenos afines (ej. Mitocondria vs Cloroplasto, Célula Animal vs Célula Vegetal, Democracia Representativa vs Participativa).
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Estructura con dos polos (`setA` y `setB`), etiqueta de intersección opcional (`intersectionLabel`), y entre **3 y 8 elementos** (`minItems: 3`, `maxItems: 8`).
+  - **Balance obligatorio:** La validación exige al menos un elemento exclusivo y al menos un elemento en la intersección (`both`), garantizando que la actividad tenga autenticidad pedagógica de Venn.
+  - **Experiencia de usuario táctil y reactiva (Mobile-First):**
+    - Arriba: Tablero visual del Diagrama de Venn dividido en 3 zonas (Solo A en azul, Intersección en violeta, Solo B en verde) con chips en tiempo real de los elementos asignados.
+    - Abajo: Banco interactivo de conceptos con botones táctiles de selección directa (>44px de altura): `[ Solo A ]`, `[ Ambos ]`, `[ Solo B ]`. Tocar la zona activa desmarca el concepto para máxima fluidez y corrección intuitiva sin frustración.
+  - **Calificación por coincidencia exacta:** El estudiante debe asignar correctamente el 100% de los elementos a sus zonas correspondientes (`left`, `both`, `right`) para obtener puntaje completo; cualquier discrepancia otorga 0 puntos; si no asigna ningún elemento se califica como `omitted`.
+  - Proyección pública estricta (`toVennDiagramPublic`): oculta `zone`, `explanation` y `sourceRef` tanto en cliente como en Edge Functions; el estudiante recibe únicamente la pista orientadora (`hint`) tras comprobar la respuesta.
+  - Soporte completo en impresión tamaño Carta y vales de respuesta del estudiante (`generateExamHtmlDocument`).
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/vennDiagram.ts`](src/lib/activities/vennDiagram.ts) y [`src/lib/activities/vennDiagram.test.ts`](src/lib/activities/vennDiagram.test.ts) (9 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/vennDiagramIntegration.test.ts`](src/lib/activities/vennDiagramIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte para importar `vennDiagram` (15/15 pruebas pasadas).
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSS):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconVennDiagram`), [`src/App.tsx`](src/App.tsx) (`VennDiagramEditor`, `VennDiagramQuestion`, `generateExamHtmlDocument`, `FORMAT_CATALOG`, generador desde plantilla) y [`src/index.css`](src/index.css) (estilos completos en Modo Día y Noche).
+  5. **Capa 5 (Edge Functions Locales y Pruebas de Servidor):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) (26 pruebas de servidor aprobadas).
+  6. **Capa 6 (Verificación Técnica Integral):**
+     - `npm.cmd run test`: **30 suites pasadas, 207/207 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` en 1.39s (código 0).
+
+
+### Fase 7 (Culminación y Cierre en 13 Actividades Definitivas — 100% Local): Actividad #13: `shortAnswer` (Respuesta Corta Conceptual con Evocación Pura) · 2026-11-04
+- **Estado:** ✅ **COMPLETADA LOCALMENTE (Actividad #13: `shortAnswer`) — CATÁLOGO DEFINITIVO CERRADO Y CONSOLIDADO EN 13 ACTIVIDADES** — Desarrollo 100% local sin alterar la versión web pública ni Supabase remoto.
+- **Decisión estratégica de originalidad pedagógica y cierre de catálogo:**
+  - Tras un riguroso análisis cognitivo de las 21 actividades propuestas originalmente, el usuario y la dirección técnica determinaron eliminar los formatos repetitivos o cosméticamente maquillados (`dragTheWords` por ser clon de `fillBlanks`, `sortParagraphs` por ser clon de `ordering`, `summary` por ser variante de `multiSelect`, `subcategories` por duplicar `sorting`, y `flashcards` por carecer de rigor evaluativo calificado).
+  - Se seleccionó la **Opción 1: `shortAnswer` (Respuesta Corta Conceptual)** como la actividad cúspide de evaluación y se acordó de forma expresa **cerrar y consolidar el catálogo definitivo en 13 actividades**, evitando la saturación del sistema y garantizando máxima autenticidad evaluativa.
+- **Diferenciación pedagógica e intencionalidad:**
+  - Todas las actividades 1 a 12 evalúan mecanismos de *reconocimiento* (recognition) de alternativas o términos visuales ya dispuestos en pantalla.
+  - `shortAnswer` es la única actividad del catálogo de EvaluEdu que evalúa **evocación activa pura** (*pure recall*): el estudiante debe generar y redactar mentalmente el término, concepto o nombre técnico preciso a partir de la pregunta, sin ninguna pista o banco de opciones.
+- **Decisiones pedagógicas y de diseño implementadas:**
+  - Estructura con pregunta orientadora (`prompt`), contexto opcional (`context`), pista (`hint`), explicación técnica privada (`explanation`), y entre **1 y 6 respuestas aceptadas** (`acceptedAnswers`, de 1 a 80 caracteres cada una).
+  - **Tolerancias pedagógicas configurables:**
+    - `ignoreAccents: boolean` (por defecto `true`): permite calificar positivamente respuestas sin importar tildes (ej. "mitocondria" coincide con "mitocóndria").
+    - `caseSensitive: boolean` (por defecto `false`): permite calificar positivamente sin importar mayúsculas/minúsculas (ej. "Mitocondria" coincide con "mitocondria" o "MITOCONDRIA").
+  - **Motor de normalización inteligente (`normalizeShortAnswer`):** Limpieza de espacios redundantes (`trim` y colapso de múltiples espacios internos a uno solo), normalización Unicode NFD para diacríticos, y comparación determinista contra el banco de respuestas aceptadas.
+  - **Detección de omisión:** Respuestas vacías o que contengan únicamente espacios se clasifican limpiamente como `omitted` (sin penalizar como incorrectas si la sala permite omisión).
+  - **Experiencia de usuario fluida e interactiva:**
+    - Campo de texto limpio con diseño responsivo, botón táctil de borrado rápido (`Limpiar`), y contador de caracteres en tiempo real (`X / 80 caracteres`).
+    - En impresión tamaño Carta y vales de respuesta del estudiante (`generateExamHtmlDocument`): renglón pautado para respuesta manuscrita.
+  - **Blindaje de privacidad:** La proyección pública (`toShortAnswerPublic`) y las Edge Functions ocultan `acceptedAnswers` y `explanation`; el estudiante nunca recibe las respuestas correctas por la red.
+- **Implementación en las 6 capas de ingeniería:**
+  1. **Capa 1 (Contrato aislado + Pruebas unitarias):** Creado [`src/lib/activities/shortAnswer.ts`](src/lib/activities/shortAnswer.ts) y [`src/lib/activities/shortAnswer.test.ts`](src/lib/activities/shortAnswer.test.ts) (14 pruebas unitarias aprobadas).
+  2. **Capa 2 (Motor central + Pruebas de integración):** Actualizado [`src/lib/activityEngine.ts`](src/lib/activityEngine.ts) y creado [`src/lib/activities/shortAnswerIntegration.test.ts`](src/lib/activities/shortAnswerIntegration.test.ts) (3 pruebas de integración aprobadas).
+  3. **Capa 3 (Importador JSON v2, Compatibilidad y Prompt Oficial):** Actualizado [`src/lib/contentImport.ts`](src/lib/contentImport.ts) y [`src/lib/contentImport.test.ts`](src/lib/contentImport.test.ts) con soporte para importar `shortAnswer` (16 pruebas pasadas).
+  4. **Capa 4 (Interfaz Docente, Estudiante, Impresión Carta y CSS):** Actualizados [`src/lib/icons.tsx`](src/lib/icons.tsx) (`IconShortAnswer`), [`src/App.tsx`](src/App.tsx) (`ShortAnswerEditor`, `ShortAnswerQuestion`, `generateExamHtmlDocument`, `FORMAT_CATALOG`, generador desde plantilla y actividad demo `a13`) y [`src/index.css`](src/index.css) (estilos completos en Modo Día y Noche con paleta ámbar/naranja).
+  5. **Capa 5 (Edge Functions Locales y Pruebas de Servidor):** Niveladas [`supabase/functions/student-room-guest/index.ts`](supabase/functions/student-room-guest/index.ts), [`supabase/functions/student-room-sync/index.ts`](supabase/functions/student-room-sync/index.ts) y [`src/lib/serverPrivacyAndRateLimit.test.ts`](src/lib/serverPrivacyAndRateLimit.test.ts) (26 pruebas de servidor aprobadas).
+  6. **Capa 6 (Verificación Técnica Integral):**
+     - `npm.cmd run test`: **32 suites pasadas, 225/225 pruebas aprobadas** (100% éxito).
+     - `npm.cmd run build`: Compilación `tsc -b` y `vite build` limpia y exitosa (código 0).
+- **Catálogo Definitivo de 13 Actividades:**
+  1. `trueFalse` (Falso / Verdadero)
+  2. `singleChoice` (Selección Única)
+  3. `matching` (Asociación por Columnas)
+  4. `sorting` (Clasificación por Categorías)
+  5. `ordering` (Ordenamiento de Procesos)
+  6. `scenario` (Escenario de Decisiones por Etapas)
+  7. `multiSelect` (Selección de Opción Múltiple)
+  8. `fillBlanks` (Completar Espacios con Fichas Táctiles)
+  9. `spotError` (Detección del Error)
+  10. `markWords` (Marcar Palabras Clave en el Texto)
+  11. `gridCheck` (Matriz de Doble Entrada)
+  12. `vennDiagram` (Diagrama de Venn)
+  13. `shortAnswer` (Respuesta Corta Conceptual)
+
+### Fase 6 (Consolidada y Pulida Localmente): Limpieza y Refinamiento Formal del Panel Administrativo Institucional y SaaS · 2026-11-04
+- **Estado:** ✅ **COMPLETADA Y PULIDA AL 100% DE FORMA LOCAL** — Lista para revisión docente/directiva previa a su despliegue en la versión pública.
+- **Objetivo y criterio alcanzado:**
+  - Eliminación de todo lenguaje pedagógico-tutorial, prototípico o de autoayuda en botones, pestañas, cabeceras y modales.
+  - Transformación integral hacia un estándar visual sobrio y formal de software educativo institucional (estilo Google Workspace Admin Console / Canvas LMS).
+  - Supresión de emojis informales, banners didácticos de debug y descripciones verbosas en los flujos administrativos.
+- **Modificaciones principales realizadas:**
+  1. **Selector de Entorno y Alcance (`AdminScopeBanner`):**
+     - Reemplazo de leyendas informales por indicadores ejecutivos: `ADMINISTRACIÓN GENERAL` y `PANEL INSTITUCIONAL`.
+     - Simplificación del botón de conmutación a `Cambiar a vista institucional` / `Volver a administración general`.
+  2. **Modal de Registro de Institución (`RegisterInstitutionModal`):**
+     - Título formal: `Registrar Institución Educativa`.
+     - Campos limpios: `Nombre oficial de la institución`, `Contacto directivo`, `Correo electrónico oficial`, `Plan institucional`.
+     - Eliminación del cuadro explicativo verde redundante y acción directa en botón: `Registrar institución`.
+  3. **Panel de Control Administrativo (`AdminDashboard`):**
+     - En modo plataforma: métricas sobrias (`Instituciones registradas`, `Licencias asignadas`, `Docentes en plataforma`, `Servicio activo`), tabla institucional sin textos de tutorial y acción formal `Gestionar →`.
+     - En modo colegio: medidor de licencias institucional, métricas claras y sección ejecutiva `Políticas Institucionales` (resguardo del banco pedagógico, privacidad de cátedra y custodia segura).
+  4. **Directorio Docente (`AdminUsersView`):**
+     - Pestañas limpias: `Docentes de la plataforma ({realUsers.length})` y `Claustro institucional ({institution.name})`.
+     - Supresión definitiva del banner explicativo `.admin-notice`.
+     - Filtros de estado formales: `Todos`, `Activos`, `Pendientes`, `Inactivos`.
+     - Píldoras de estado en tabla simplificadas a `Activo`, `Pendiente` e `Inactivo`.
+     - Acciones de tabla concisas y directas: `Reactivar`, `Restablecer clave` / `Reenviar acceso`, `Desactivar` / `Pausar`.
+     - Modal de alta e invitación: campos directos (`Nombre completo del docente`, `Correo electrónico institucional`), eliminación del recuadro interno de backend y botones limpios (`Cancelar`, `Registrar docente` / `Enviar invitación`).
+  5. **Libro de Auditoría (`AdminAuditView`):**
+     - Pestañas claras: `Auditoría de plataforma` y `Auditoría institucional`.
+     - Título formal: `Registro de Auditoría`, subtítulo: `Trazabilidad de eventos de seguridad, inicio de sesión y administración de accesos.`
+     - Eliminación de tecnicismos internos de desarrollo (referencias a "trigger PostgreSQL", "Supabase Inmutable", etc.).
+     - Icono unificado formal con SVG institucional (`IconAudit`).
+  6. **Navegación Lateral del Administrador:**
+     - Subtítulo formal: `Administración general`.
+     - Botones de navegación directos: `Instituciones` / `Resumen`, `Directorio docente` y `Auditoría`.
+- **Garantía de preservación funcional:**
+  - Todos los endpoints de Supabase Edge Functions (`admin-create-pilot-teacher`, `admin-invite-teacher`, `admin-remove-user`, `admin-resend-access`) y la lectura en tiempo real de `audit_events` y `profiles` permanecen 100% operativos.
+- **Verificación técnica integral:**
+  - `npm.cmd run test`: **32 suites pasadas, 225/225 pruebas aprobadas** (100% de éxito).
+  - `npm.cmd run build`: Compilación `tsc -b` y empaquetado de producción con Vite exitosos sin errores.
 
