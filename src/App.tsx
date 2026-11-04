@@ -1685,7 +1685,7 @@ function App() {
     </header>
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
-      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.2</small></div></aside>}
+      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.3</small></div></aside>}
       <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
@@ -1827,7 +1827,7 @@ function RoleLanding({
         <RoleCard icon={<IconStudent size={26} />} title="Estudiante" description="Ingresa a una sala con el código de tu docente." onClick={() => onChoose('student')} tone="student" />
         <RoleCard icon={<IconAdmin size={26} />} title="Administrador" description="Gestiona docentes, permisos y configuración general." onClick={() => onChoose('admin')} tone="admin" />
       </div>
-      <small className="landing-note">EvaluEdu · v1.2</small>
+      <small className="landing-note">EvaluEdu · v1.3</small>
     </div>
   )
 }
@@ -3320,7 +3320,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Falso o Verdadero',
     subtitle: 'Verificación y contraste conceptual',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Capacidad de discernir afirmaciones precisas de conceptos erróneos o confusiones habituales sin depender de la memoria pasiva.',
     studentExperience: 'El estudiante analiza una afirmación. Si la respuesta es incorrecta, la aplicación le envía una pista orientadora para inducir su relectura reflexiva, sin revelarle la clave.',
     contentRequirements: 'Afirmaciones claras con justificación pedagógica y pistas formativas orientadoras.',
@@ -3331,7 +3331,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Opción Única',
     subtitle: 'Discriminación con distractores fundamentados',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Comprensión conceptual profunda y capacidad de descartar alternativas construidas sobre errores conceptuales comunes.',
     studentExperience: 'Opciones barajadas aleatoriamente. Al responder, el alumno recibe retroalimentación explicativa orientada al aprendizaje.',
     contentRequirements: 'Pregunta clara, una única respuesta correcta inequívoca y distractores plausibles del mismo tema.',
@@ -3342,7 +3342,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Asociación de Conceptos',
     subtitle: 'Correspondencia biunívoca entre elementos',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Relación funcional y definición exacta entre términos, causas, personajes o propiedades emparejadas.',
     studentExperience: 'Términos en una columna y definiciones en otra con selector dinámico o arrastre. Pistas orientadoras en emparejamientos fallidos.',
     contentRequirements: 'Mínimo dos pares inequívocos término ↔ definición sin ambigüedades cruzadas.',
@@ -3353,7 +3353,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Clasificación por Categorías',
     subtitle: 'Agrupación taxonómica arrastrar y soltar',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Habilidad para estructurar conceptos o casos bajo etiquetas y criterios taxonómicos rigurosos.',
     studentExperience: 'Cajas de categorías visibles y fichas interactivas para clasificar, con adaptación accesible para pantallas móviles.',
     contentRequirements: 'Categorías bien delimitadas y elementos asignados de forma exclusiva a una categoría.',
@@ -3364,7 +3364,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Ordenamiento Secuencial',
     subtitle: 'Secuenciación lógica o cronológica de procesos',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Comprensión de procesos paso a paso, cronologías históricas o algoritmos procedimentales de resolución.',
     studentExperience: 'Bloques desordenados con controles táctiles para subir o bajar de posición hasta establecer la secuencia correcta.',
     contentRequirements: 'Pasos o eventos sucesivos con un orden lógico único y justificado.',
@@ -3375,7 +3375,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Escenario de Decisiones',
     subtitle: 'Criterio situacional con consecuencias reales',
     status: 'active',
-    badge: 'Activo · v1.2',
+    badge: 'Activo · v1.3',
     evaluates: 'Juicio crítico y toma de decisiones frente a situaciones del mundo real o dilemas profesionales aplicados.',
     studentExperience: 'Lectura inmersiva del caso y toma de postura entre varias opciones. Cada camino despliega consecuencias formativas explicadas.',
     contentRequirements: 'Descripción del contexto situacional, opciones de acción concretas y consecuencias formativas para cada alternativa.',
@@ -3519,7 +3519,6 @@ function Overview({
   const recentRooms = rooms.slice(-3).reverse()
 
   const activeFormats = FORMAT_CATALOG.filter((f) => f.status === 'active')
-  const upcomingFormats = FORMAT_CATALOG.filter((f) => f.status === 'upcoming')
 
   return (
     <>
@@ -3652,38 +3651,6 @@ function Overview({
               <div className="format-catalog-card-head">
                 <span className="format-catalog-icon">{item.icon}</span>
                 <span className="format-badge active">{item.badge}</span>
-              </div>
-              <h3>{item.title}</h3>
-              <p>{item.subtitle}</p>
-              <div className="format-catalog-card-foot">
-                <button
-                  type="button"
-                  className="outline-button btn-small"
-                  onClick={() => setSelectedFormat(item)}
-                >
-                  Descripción
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <div className="upcoming-formats-heading">
-          <div>
-            <p className="eyebrow">HOJA DE RUTA PEDAGÓGICA</p>
-            <h3>Próximos formatos formativos</h3>
-            <p className="section-subtitle">
-              Formatos en preparación hacia la suite de 21 actividades de evaluación activa.
-            </p>
-          </div>
-        </div>
-
-        <div className="formats-catalog-grid upcoming-grid">
-          {upcomingFormats.map((item) => (
-            <article key={item.id} className="format-catalog-card upcoming">
-              <div className="format-catalog-card-head">
-                <span className="format-catalog-icon">{item.icon}</span>
-                <span className="format-badge upcoming">{item.badge}</span>
               </div>
               <h3>{item.title}</h3>
               <p>{item.subtitle}</p>
@@ -4101,7 +4068,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
   const firstSituation = situations[0]
   const activities: Activity[] = []
 
-  // 1. FALSO / VERDADERO v1.2
+  // 1. FALSO / VERDADERO
   if (matches.trueFalse.available && concepts.length > 0) {
     const c = concepts[0]
     const statement = `${c.name}: ${c.definition}`
@@ -4160,7 +4127,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     }
   }
 
-  // 2. SELECCIÓN ÚNICA v1.2
+  // 2. SELECCIÓN ÚNICA
   if (matches.singleChoice.available && concepts.length > 0) {
     const target = concepts[0]
     const prompt = `¿Cuál de las siguientes opciones define con mayor precisión a "${target.name}"?`
@@ -4205,7 +4172,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 3. ASOCIACIÓN (MATCHING) v1.2
+  // 3. ASOCIACIÓN (MATCHING)
   if (matches.matching.available && concepts.length >= 2) {
     const prompt = 'Relaciona cada concepto con su definición correspondiente.'
     const hint = 'Distingue cada concepto de su función o definición específica en el tema.'
@@ -4238,7 +4205,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 4. CLASIFICACIÓN (SORTING) v1.2
+  // 4. CLASIFICACIÓN (SORTING)
   if (matches.sorting.available && categories.length >= 2 && concepts.length >= 2) {
     const prompt = 'Clasifica los siguientes elementos en la categoría que les corresponde.'
     const hint = 'Analiza a qué categoría o grupo conceptual pertenece cada elemento.'
@@ -4272,7 +4239,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 5. ORDENAMIENTO (ORDERING) v1.2
+  // 5. ORDENAMIENTO (ORDERING)
   if (matches.ordering.available && steps.length >= 2) {
     const prompt = 'Ordena los pasos del proceso según la secuencia pedagógica del contenido.'
     const hint = 'Recuerda cuál es el paso inicial y cómo progresa ordenadamente la secuencia.'
@@ -4300,7 +4267,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 6. ESCENARIO DE DECISIONES v1.2
+  // 6. ESCENARIO DE DECISIONES
   if (matches.scenario.available && firstSituation) {
     const prompt = firstSituation.context
     const hint = 'Evalúa las consecuencias directas de cada decisión antes de confirmar tu respuesta.'
@@ -4714,7 +4681,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
     { id: makeEditorId('option-'), text: 'Ignorar las consecuencias', consequence: 'El problema puede crecer y afectar al grupo.', feedback: 'Considera cómo cada decisión afecta a otras personas.', recommended: false },
   ]
   return {
-    // Falso/verdadero v1.2: la clave queda sin elegir y la pista/explicación vacías; el docente debe completarlas.
+    // Falso/verdadero: la clave queda sin elegir y la pista/explicación vacías; el docente debe completarlas.
     trueFalse: {
       context: '',
       statement: completeConcepts[0] ? completeConcepts[0].name + ': ' + completeConcepts[0].definition : '',
@@ -4722,7 +4689,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       explanation: '',
       hint: '',
     },
-    // Selección única v1.2: ninguna opción viene marcada como correcta por defecto; el docente debe elegir la clave y redactar la pista.
+    // Selección única: ninguna opción viene marcada como correcta por defecto; el docente debe elegir la clave y redactar la pista.
     singleChoice: {
       context: '',
       options: (concepts.length >= 2 ? concepts.map((item) => item.name) : ['', '']).slice(0, 6).map((label) => ({ id: makeEditorId('choice-'), label, correct: false })),
@@ -4797,14 +4764,14 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Asociación v1.2: pares con pista orientadora obligatoria y explicación privada opcional.
+    // Asociación: pares con pista orientadora obligatoria y explicación privada opcional.
     matching: {
       context: '',
       pairs: (completeConcepts.length >= 2 ? completeConcepts : [{ id: 'empty-1', name: '', definition: '', example: '' }, { id: 'empty-2', name: '', definition: '', example: '' }]).slice(0, 6).map((item) => ({ id: makeEditorId('pair-'), left: item.name, right: item.definition })),
       hint: '',
       explanation: '',
     },
-    // Clasificación v1.2: categorías, elementos, pista orientadora obligatoria y explicación privada opcional.
+    // Clasificación: categorías, elementos, pista orientadora obligatoria y explicación privada opcional.
     sorting: {
       context: '',
       categories: (categories.length >= 2 ? categories : ['Categoría A', 'Categoría B']).slice(0, 6),
@@ -4812,14 +4779,14 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Ordenamiento v1.2: pasos en secuencia lógica, pista orientadora obligatoria y explicación privada opcional.
+    // Ordenamiento: pasos en secuencia lógica, pista orientadora obligatoria y explicación privada opcional.
     ordering: {
       context: '',
       steps: (steps.length >= 3 ? steps : ['Paso inicial', 'Paso intermedio', 'Paso final']).slice(0, 8),
       hint: '',
       explanation: '',
     },
-    // Escenario de decisiones v1.2: caso contextualizado, etapas con consecuencias pedagógicas, pista orientadora y justificación privada.
+    // Escenario de decisiones: caso contextualizado, etapas con consecuencias pedagógicas, pista orientadora y justificación privada.
     scenario: {
       situation: firstSituation || template?.description || 'En una situación comunitaria se presentan diferentes posturas sobre cómo abordar una problemática compartida.',
       stages: [{ id: makeEditorId('stage-'), title: 'Decisión principal', prompt: situation?.decision || template?.objective || '¿Qué acción debe tomarse primero?', options: scenarioOptions }],

@@ -1520,3 +1520,20 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
      - `npm.cmd run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción con Vite exitosos sin errores en 704ms.
 
 
+
+
+### Ajuste Visual Final y Bump Oficial a Versión v1.3 · 2026-11-04
+- **Estado:** ✅ **COMPLETADO Y VERIFICADO (34 SUITES, 241/241 PRUEBAS PASANDO, BUILD EXITOSO)**
+- **Motivación:**
+  - El usuario indicó dos inconsistencias visuales:
+    1. En el catálogo educativo continuaba mostrándose al final la sección "HOJA DE RUTA PEDAGÓGICA / Próximos formatos formativos hacia la suite de 21 actividades", lo cual generaba confusión dado que el catálogo está oficialmente cerrado en 13 actividades definitivas.
+    2. La pantalla de bienvenida inicial (selección de rol) y el pie de la barra lateral aún indicaban `v1.2` en lugar de `v1.3`.
+- **Acciones Realizadas:**
+  1. *Eliminación de la sección Hoja de Ruta:* Se retiró por completo la sección `<section className="upcoming-formats-section">` y `<div className="upcoming-formats-heading">` de `Overview` en [`src/App.tsx`](src/App.tsx).
+  2. *Actualización de versión a v1.3:*
+     - Pantalla de bienvenida / selector de rol: `<small className="landing-note">EvaluEdu · v1.3</small>`.
+     - Pie de la barra lateral: `<small>EvaluEdu · v1.3</small>`.
+     - Badges de formatos en `FORMAT_CATALOG`: las 6 actividades iniciales ahora portan unificadamente `badge: 'Activo · v1.3'`.
+- **Verificación Técnica:**
+  - `npm.cmd test`: 34 suites pasadas, 241/241 pruebas aprobadas (100% de éxito).
+  - `npm.cmd run build`: Compilación TypeScript (`tsc -b`) y empaquetado de producción Vite en 650ms.
