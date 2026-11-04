@@ -817,20 +817,26 @@
           },
           {
             id: 'act6', x: 215, y: 40, w: 95, h: 78,
-            icon: '🧩', title: '6 Contratos', sub: 'Actividades v1.2', badge: 'MÓDULOS',
+            icon: '🧩', title: '11 Contratos', sub: 'Actividades v1.3', badge: 'MÓDULOS',
             wires: ['w-core-act', 'w-act-bars'],
-            status: '91/91 Pruebas en Verde',
+            status: '192/192 Pruebas en Verde',
             file: 'src/lib/activities/*.ts',
-            simple: 'Son los 6 tipos de ejercicios interactivos que los alumnos resuelven en su pantalla, ordenados desde el más sencillo hasta el más desafiante. Cada uno tiene sus propias reglas para no mezclar peras con manzanas.',
+            simple: 'Son los 11 tipos de ejercicios interactivos activos que los alumnos resuelven en su pantalla, ordenados desde el más sencillo hasta el más desafiante. Cada uno tiene sus propias reglas para no mezclar peras con manzanas.',
             bullets: [
               '1. Falso / Verdadero (trueFalse.ts)',
               '2. Selección Múltiple con única respuesta (singleChoice.ts)',
-              '3. Asociación tocando columnas con insignias de colores (matching.ts)',
-              '4. Clasificación arrastrando o tocando categorías (sorting.ts)',
-              '5. Ordenamiento de pasos con desorden garantizado (ordering.ts)',
-              '6. Escenario de decisiones por etapas con consecuencias (scenario.ts)'
+              '3. Selección de Opción Múltiple sin inducir cantidad (multiSelect.ts)',
+              '4. Completar Espacios con fichas táctiles y distractores (fillBlanks.ts)',
+              '5. Detección del Error en procedimientos o conceptos (spotError.ts)',
+              '6. Marcar Palabras Clave en el Texto con resaltador táctil (markWords.ts)',
+              '7. Matriz de Doble Entrada para cruzar conceptos y propiedades (gridCheck.ts)',
+              '8. Asociación tocando columnas con insignias de colores (matching.ts)',
+              '9. Clasificación arrastrando o tocando categorías (sorting.ts)',
+              '10. Ordenamiento de pasos con desorden garantizado (ordering.ts)',
+              '11. Escenario de decisiones por etapas con consecuencias (scenario.ts)',
+              '12. Diagrama de Venn para contraste e intersección conceptual (vennDiagram.ts)'
             ],
-            code: `// Módulos independientes en src/lib/activities/:\ntrueFalse.ts   | singleChoice.ts | matching.ts\nsorting.ts     | ordering.ts     | scenario.ts`,
+            code: `// Módulos independientes en src/lib/activities/:\ntrueFalse.ts   | singleChoice.ts | multiSelect.ts | fillBlanks.ts | spotError.ts\nmarkWords.ts   | gridCheck.ts    | vennDiagram.ts  | shortAnswer.ts | matching.ts    | sorting.ts    | ordering.ts   | scenario.ts`,
             connections: ['core', 'bars', 'db']
           },
           {
@@ -1056,7 +1062,7 @@
             wires: ['s-vite-vitest'],
             status: '14 Suites Aprobadas (100%)',
             file: 'src/lib/**/*.test.ts',
-            simple: 'Es un robot probador que ejecuta 91 exámenes automáticos sobre el código en menos de 2 segundos. Verifica que las 6 actividades califiquen bien los aciertos, los errores, las preguntas omitidas y el tiempo agotado.',
+            simple: 'Es un robot probador que ejecuta 225 exámenes automáticos sobre el código en menos de 2 segundos. Verifica que las 6 actividades califiquen bien los aciertos, los errores, las preguntas omitidas y el tiempo agotado.',
             bullets: [
               'Versión instalada: Vitest ^5.0.3.',
               '14 archivos de prueba (.test.ts) cubriendo pruebas unitarias y de integración de las 6 actividades y del importador JSON.',
@@ -1265,11 +1271,11 @@
             id: 'ceng', type: 'core', x: 385, y: 215, w: 170, h: 90,
             icon: '⚙️', title: 'MOTOR CENTRAL', sub: 'activityEngine.ts', badge: 'ORQUESTADOR',
             wires: ['c-eng-tf', 'c-eng-sc', 'c-eng-ma', 'c-eng-so', 'c-eng-or', 'c-eng-sn', 'c-eng-pub', 'c-eng-eval'],
-            status: 'Escalabilidad Preparada (~21 Tipos)',
+            status: 'Escalabilidad Activa (7 de 21 Tipos)',
             file: 'src/lib/activityEngine.ts',
-            simple: 'Es el director de orquesta de las preguntas. Conecta los 6 contratos actuales y se encarga de que todas las actividades hablen el mismo idioma al guardarse, mostrarse al estudiante y calificarse.',
+            simple: 'Es el director de orquesta de las preguntas. Conecta los 7 contratos activos actuales (incluyendo multiSelect v1.3) y se encarga de que todas las actividades hablen el mismo idioma al guardarse, mostrarse al estudiante y calificarse.',
             bullets: [
-              'Arquitectura modular pensada para escalar hacia ~21 formatos futuros sin romper los 6 actuales.',
+              'Arquitectura modular en expansión progresiva hacia 21 formatos (actualmente 7 activos: trueFalse, singleChoice, multiSelect, matching, sorting, ordering y scenario).',
               'Prohíbe comparar respuestas de un tipo contra otro tipo distinto.',
               'Distingue con precisión matemática entre: Correcta, Incorrecta, Omitida (en blanco) y Tiempo Agotado (timeout).'
             ],

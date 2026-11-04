@@ -152,6 +152,19 @@ export function IconSingleChoice({ size = 20, className = '', ...props }: IconPr
   )
 }
 
+export function IconMultiSelect({ size = 20, className = '', ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+      <rect width="7" height="7" x="3" y="3" rx="1.5" />
+      <path d="m5 6.5 1.5 1.5 3-3" />
+      <line x1="14" y1="6.5" x2="21" y2="6.5" />
+      <rect width="7" height="7" x="3" y="14" rx="1.5" />
+      <path d="m5 17.5 1.5 1.5 3-3" />
+      <line x1="14" y1="17.5" x2="21" y2="17.5" />
+    </svg>
+  )
+}
+
 export function IconMatching({ size = 20, className = '', ...props }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
@@ -230,6 +243,72 @@ export function IconSparkMascot({ size = 32, className = '', ...props }: IconPro
       <circle cx="60.5" cy="54.5" r="0.7" fill="#ffffff" />
       {/* Sonrisa */}
       <path d="M46 60 Q50 64 54 60" stroke="#12251f" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+    </svg>
+  )
+}
+
+export function IconFillBlanks({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M4 7h6" />
+      <rect x="12" y="4.5" width="8" height="5" rx="1.5" strokeDasharray="2.5 2" />
+      <path d="M4 17h4" />
+      <rect x="10" y="14.5" width="7" height="5" rx="1.5" />
+      <path d="M19 17h1" />
+    </svg>
+  )
+}
+
+export function IconSpotError({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+      <line x1="11" y1="8" x2="11" y2="11.5" />
+      <circle cx="11" cy="14" r="0.6" fill="currentColor" />
+    </svg>
+  )
+}
+
+export function IconMarkWords({ size = 20, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="m15.5 4 4.5 4.5L9 19.5H4.5V15L15.5 4z" />
+      <path d="m12.5 7 4.5 4.5" />
+      <line x1="4" y1="21" x2="20" y2="21" />
+    </svg>
+  )
+}
+
+export function IconGridCheck({ size = 20, className = '', ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true" {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 10h18" />
+      <path d="M10 3v18" />
+      <path d="m5.5 6.5 1 1 2-2" />
+      <path d="m13 14.5 1.5 1.5 3-3" />
+    </svg>
+  )
+}
+
+export function IconVennDiagram({ size = 20, className = '', ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true" {...props}>
+      <circle cx="8.5" cy="12" r="5.5" />
+      <circle cx="15.5" cy="12" r="5.5" />
+      <path d="M12 9.5a5.5 5.5 0 0 1 0 5" strokeWidth="2.4" />
+    </svg>
+  )
+}
+
+export function IconShortAnswer({ size = 20, className = '', ...props }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true" {...props}>
+      <rect x="2.5" y="4.5" width="19" height="15" rx="3" />
+      <path d="M6.5 12h5" />
+      <path d="M14.5 9.5v5" />
+      <path d="M7 16h10" strokeDasharray="1.5 2" />
     </svg>
   )
 }

@@ -301,6 +301,12 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       label,
       correct: label === answer,
     }))
+    const msAnswerSet = new Set(Array.isArray(answer) ? answer : [])
+    const msOptions = options.map((label, index) => ({
+      id: `fallback-ms-${index}`,
+      label,
+      correct: msAnswerSet.has(label),
+    }))
 
     return {
       scenario: details.scenario ?? {
@@ -319,7 +325,29 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       },
       ordering: details.ordering ?? { steps: orderingSteps },
       singleChoice: details.singleChoice ?? { options: choiceOptions },
+      multiSelect: details.multiSelect ?? { options: msOptions },
+      fillBlanks: details.fillBlanks ?? { textWithBlanks: activity.prompt, blanks: [], distractors: [] },
+      spotError: details.spotError ?? { segments: [] },
+      markWords: details.markWords ?? { text: activity.prompt, words: [] },
+      gridCheck: details.gridCheck ?? { rows: [], columns: [], expectedCells: [] },
+      vennDiagram: details.vennDiagram ?? { setA: 'Conjunto A', setB: 'Conjunto B', intersectionLabel: 'Ambos', items: [] },
+      shortAnswer: details.shortAnswer ?? {
+        acceptedAnswers: [activity.prompt ?? 'Respuesta'],
+        caseSensitive: false,
+        ignoreAccents: true,
+        explanation: '',
+        hint: '',
+      },
     }
+  }
+
+  function normalizeShortAnswerText(text: string, caseSensitive: boolean, ignoreAccents: boolean): string {
+    let res = text.trim().replace(/\s+/g, ' ')
+    if (!caseSensitive) res = res.toLowerCase()
+    if (ignoreAccents) {
+      res = res.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    }
+    return res
   }
 
   function isCompleteServer(activity: AnyRecord, response: AnyRecord): boolean {
@@ -331,8 +359,18 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       const choices = record(response.choices)
       return stages.length > 0 && stages.every((stage: AnyRecord) => Boolean(choices[stage.id]))
     }
-    if (response.type === 'trueFalse' || response.type === 'singleChoice') {
-      return Boolean(response.value)
+    if (response.type === 'trueFalse' || response.type === 'singleChoice' || response.type === 'spotError' || response.type === 'shortAnswer') {
+      return Boolean(response.value && String(response.value).trim())
+    }
+    if (response.type === 'multiSelect' || response.type === 'markWords' || response.type === 'gridCheck') {
+      const values = Array.isArray(response.values) ? response.values : []
+      return values.length > 0
+    }
+    if (response.type === 'fillBlanks') {
+      const blanks = current.fillBlanks.blanks ?? []
+      const answers = record(response.answers)
+      const chosen = blanks.map((b: AnyRecord) => String(answers[b.id] ?? '').trim())
+      return blanks.length > 0 && chosen.every(Boolean) && new Set(chosen).size === blanks.length
     }
     if (response.type === 'matching') {
       const pairs = current.matching.pairs ?? []
@@ -349,6 +387,14 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       const order = Array.isArray(response.order) ? response.order : []
       return order.length === steps.length && new Set(order).size === steps.length
     }
+    if (response.type === 'vennDiagram') {
+      const items = current.vennDiagram.items ?? []
+      const assignments = record(response.assignments)
+      return items.length > 0 && items.every((item: AnyRecord) => {
+        const z = assignments[item.id]
+        return z === 'left' || z === 'both' || z === 'right'
+      })
+    }
     return false
   }
 
@@ -356,8 +402,16 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
     if (!response) return true
     if (response.type !== activity.type) return true
 
-    if (response.type === 'trueFalse' || response.type === 'singleChoice') {
-      return !response.value
+    if (response.type === 'trueFalse' || response.type === 'singleChoice' || response.type === 'spotError') {
+      return !response.value || !String(response.value).trim()
+    }
+    if (response.type === 'multiSelect' || response.type === 'markWords' || response.type === 'gridCheck') {
+      const values = Array.isArray(response.values) ? response.values : []
+      return values.length === 0
+    }
+    if (response.type === 'fillBlanks') {
+      const answers = record(response.answers)
+      return Object.keys(answers).length === 0 || Object.values(answers).every((val) => !String(val ?? '').trim())
     }
     if (response.type === 'matching') {
       const pairs = record(response.pairs)
@@ -374,6 +428,10 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
     if (response.type === 'scenario') {
       const choices = record(response.choices)
       return Object.keys(choices).length === 0 || Object.values(choices).every((val) => !val)
+    }
+    if (response.type === 'vennDiagram') {
+      const assignments = record(response.assignments)
+      return Object.keys(assignments).length === 0 || Object.values(assignments).every((val) => !val)
     }
     return false
   }
@@ -404,6 +462,48 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       return option?.correct === true
     }
 
+    if (response.type === 'spotError') {
+      const segments = current.spotError.segments ?? []
+      const seg = segments.find((s: AnyRecord) => s.id === response.value || s.text === response.value)
+      return seg?.hasError === true
+    }
+
+    if (response.type === 'markWords') {
+      const words = current.markWords.words ?? []
+      const values = Array.isArray(response.values) ? response.values.map((v: string) => v.trim()).filter(Boolean) : []
+      if (values.length === 0) return false
+      const selectedTokens = values
+        .map((val: string) => words.find((w: AnyRecord) => w.id === val || String(w.text ?? '').toLowerCase() === val.toLowerCase()))
+        .filter(Boolean) as AnyRecord[]
+      if (selectedTokens.length !== values.length) return false
+      const selectedIds = new Set(selectedTokens.map((t: AnyRecord) => t.id))
+      const expectedTokens = words.filter((w: AnyRecord) => w.correct === true)
+      if (expectedTokens.length === 0) return false
+      const expectedIds = new Set(expectedTokens.map((t: AnyRecord) => t.id))
+      const hasAllExpected = [...expectedIds].every((id) => selectedIds.has(id))
+      const hasNoDistractors = selectedTokens.every((t: AnyRecord) => t.correct === true)
+      return hasAllExpected && hasNoDistractors && selectedIds.size === expectedIds.size
+    }
+
+    if (response.type === 'multiSelect') {
+      const options = current.multiSelect.options ?? []
+      const values = Array.isArray(response.values) ? response.values : []
+      const selectedOptions = values
+        .map((val: string) => options.find((opt: AnyRecord) => opt.id === val || opt.label === val))
+        .filter(Boolean) as AnyRecord[]
+      if (selectedOptions.length !== values.length) return false
+      const selectedIds = new Set(selectedOptions.map((opt) => opt.id))
+      if (selectedIds.size !== values.length) return false
+      const correctIds = new Set(options.filter((opt: AnyRecord) => opt.correct === true).map((opt: AnyRecord) => opt.id))
+      return correctIds.size > 0 && selectedIds.size === correctIds.size && [...correctIds].every((id) => selectedIds.has(id))
+    }
+
+    if (response.type === 'fillBlanks') {
+      const blanks = current.fillBlanks.blanks ?? []
+      const answers = record(response.answers)
+      return blanks.length > 0 && blanks.every((b: AnyRecord) => String(answers[b.id] ?? '').trim() === String(b.answer ?? '').trim())
+    }
+
     if (response.type === 'matching') {
       const pairs = current.matching.pairs ?? []
       const userPairs = record(response.pairs)
@@ -420,6 +520,20 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
       const steps = current.ordering.steps ?? []
       const order = Array.isArray(response.order) ? response.order : []
       return order.every((step: string, index: number) => step === steps[index])
+    }
+
+    if (response.type === 'gridCheck') {
+      const expected = current.gridCheck.expectedCells ?? []
+      const values = Array.isArray(response.values) ? response.values : []
+      const selected = new Set(values)
+      const target = new Set(expected)
+      return selected.size === target.size && [...target].every((c) => selected.has(c))
+    }
+
+    if (response.type === 'vennDiagram') {
+      const items = current.vennDiagram.items ?? []
+      const assignments = record(response.assignments)
+      return items.length > 0 && items.every((item: AnyRecord) => assignments[item.id] === item.zone)
     }
 
     return false
@@ -446,6 +560,148 @@ describe('Fase 5 - Etapa 3: Nivelación del Motor de Calificación en Servidor c
     // Por Etiqueta
     expect(compareServer(activity, { type: 'singleChoice', value: 'Opción B' })).toBe(true)
     expect(compareServer(activity, { type: 'singleChoice', value: 'Opción A' })).toBe(false)
+  })
+
+  it('califica correctamente multiSelect por coincidencia exacta sin inducir cantidad', () => {
+    const activity = {
+      id: 'ms-1',
+      type: 'multiSelect',
+      details: {
+        multiSelect: {
+          options: [
+            { id: 'opt-a', label: 'Opción A', correct: true },
+            { id: 'opt-b', label: 'Opción B', correct: true },
+            { id: 'opt-c', label: 'Opción C', correct: false },
+          ],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'multiSelect', values: [] })).toBe(true)
+    expect(compareServer(activity, { type: 'multiSelect', values: ['opt-a', 'opt-b'] })).toBe(true)
+    expect(compareServer(activity, { type: 'multiSelect', values: ['Opción B', 'Opción A'] })).toBe(true)
+    expect(compareServer(activity, { type: 'multiSelect', values: ['Opción A'] })).toBe(false)
+    expect(compareServer(activity, { type: 'multiSelect', values: ['Opción A', 'Opción B', 'Opción C'] })).toBe(false)
+  })
+
+  it('califica correctamente fillBlanks en servidor verificando todos los espacios en orden', () => {
+    const activity = {
+      id: 'fb-1',
+      type: 'fillBlanks',
+      details: {
+        fillBlanks: {
+          textWithBlanks: 'En {{1}} se analiza y en {{2}} se corrige.',
+          blanks: [
+            { id: '1', answer: 'Diagnóstico' },
+            { id: '2', answer: 'Seguimiento' },
+          ],
+          distractors: ['Improvisación'],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'fillBlanks', answers: {} })).toBe(true)
+    expect(isCompleteServer(activity, { type: 'fillBlanks', answers: { '1': 'Diagnóstico' } })).toBe(false)
+    expect(compareServer(activity, { type: 'fillBlanks', answers: { '1': 'Diagnóstico', '2': 'Seguimiento' } })).toBe(true)
+    expect(compareServer(activity, { type: 'fillBlanks', answers: { '1': 'Seguimiento', '2': 'Diagnóstico' } })).toBe(false)
+  })
+
+  it('califica correctamente spotError en servidor por ID o texto del fragmento con error', () => {
+    const activity = {
+      id: 'se-1',
+      type: 'spotError',
+      details: {
+        spotError: {
+          segments: [
+            { id: 's1', text: 'Paso 1 correcto', hasError: false },
+            { id: 's2', text: 'Paso 2 con error', hasError: true },
+            { id: 's3', text: 'Paso 3 correcto', hasError: false },
+          ],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'spotError', value: '' })).toBe(true)
+    expect(compareServer(activity, { type: 'spotError', value: 's2' })).toBe(true)
+    expect(compareServer(activity, { type: 'spotError', value: 'Paso 2 con error' })).toBe(true)
+    expect(compareServer(activity, { type: 'spotError', value: 's1' })).toBe(false)
+  })
+
+  it('califica correctamente markWords en servidor por ID o texto de las palabras clave', () => {
+    const activity = {
+      id: 'mw-1',
+      type: 'markWords',
+      details: {
+        markWords: {
+          text: 'La [energía solar*] y el [viento*] son limpias frente al [carbón].',
+          words: [
+            { id: 'w1', text: 'energía solar', correct: true },
+            { id: 'w2', text: 'viento', correct: true },
+            { id: 'w3', text: 'carbón', correct: false },
+          ],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'markWords', values: [] })).toBe(true)
+    expect(isCompleteServer(activity, { type: 'markWords', values: ['w1'] })).toBe(true)
+    expect(compareServer(activity, { type: 'markWords', values: ['w1', 'w2'] })).toBe(true)
+    expect(compareServer(activity, { type: 'markWords', values: ['viento', 'energía solar'] })).toBe(true)
+    expect(compareServer(activity, { type: 'markWords', values: ['w1'] })).toBe(false)
+    expect(compareServer(activity, { type: 'markWords', values: ['w1', 'w2', 'w3'] })).toBe(false)
+  })
+
+  it('califica correctamente vennDiagram en servidor por zonas asignadas y detecta omisión', () => {
+    const activity = {
+      id: 'vd-1',
+      type: 'vennDiagram',
+      details: {
+        vennDiagram: {
+          setA: 'Célula Animal',
+          setB: 'Célula Vegetal',
+          intersectionLabel: 'Ambos',
+          items: [
+            { id: 'v1', label: 'Centriolos', zone: 'left' },
+            { id: 'v2', label: 'Mitocondrias', zone: 'both' },
+            { id: 'v3', label: 'Cloroplastos', zone: 'right' },
+          ],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'vennDiagram', assignments: {} })).toBe(true)
+    expect(isCompleteServer(activity, { type: 'vennDiagram', assignments: { v1: 'left', v2: 'both' } })).toBe(false)
+    expect(isCompleteServer(activity, { type: 'vennDiagram', assignments: { v1: 'left', v2: 'both', v3: 'right' } })).toBe(true)
+
+    expect(compareServer(activity, { type: 'vennDiagram', assignments: { v1: 'left', v2: 'both', v3: 'right' } })).toBe(true)
+    expect(compareServer(activity, { type: 'vennDiagram', assignments: { v1: 'both', v2: 'left', v3: 'right' } })).toBe(false)
+  })
+
+  it('califica correctamente gridCheck en servidor por celdas exactas y trata respuesta vacía como omisión', () => {
+    const activity = {
+      id: 'gc-1',
+      type: 'gridCheck',
+      details: {
+        gridCheck: {
+          rows: [
+            { id: 'r1', label: 'Eólico' },
+            { id: 'r2', label: 'Carbón' },
+          ],
+          columns: [
+            { id: 'c1', label: 'Renovable' },
+            { id: 'c2', label: 'Emite CO2' },
+          ],
+          expectedCells: ['r1:c1', 'r2:c2'],
+        },
+      },
+    }
+
+    expect(isOmittedServer(activity, { type: 'gridCheck', values: [] })).toBe(true)
+    expect(isCompleteServer(activity, { type: 'gridCheck', values: ['r1:c1'] })).toBe(true)
+    expect(compareServer(activity, { type: 'gridCheck', values: ['r1:c1', 'r2:c2'] })).toBe(true)
+    expect(compareServer(activity, { type: 'gridCheck', values: ['r2:c2', 'r1:c1'] })).toBe(true)
+    expect(compareServer(activity, { type: 'gridCheck', values: ['r1:c1'] })).toBe(false)
+    expect(compareServer(activity, { type: 'gridCheck', values: ['r1:c1', 'r2:c2', 'r1:c2'] })).toBe(false)
   })
 
   it('califica correctamente scenario tanto por ID como por texto', () => {

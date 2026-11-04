@@ -1475,3 +1475,12 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
 - **Verificación Técnica Global:**
   - `npm.cmd test`: **33 suites pasadas, 235/235 pruebas aprobadas** (100% de éxito).
   - `npm.cmd run build`: Compilación TypeScript (`tsc -b`) y empaquetado Vite exitoso en producción.
+
+### Estado de Preparación para Publicación Unificada (Fase 6 + Fase 7) · 2026-11-04
+- **Decisión operativa del usuario:** La publicación a la versión pública (`git push origin main` hacia GitHub Pages) se ordenará y ejecutará desde la sesión de trabajo de la **Fase 7**.
+- **Consolidación local:**
+  - Todos los módulos de las 13 actividades definitivas (`src/lib/activities/*`), sus pruebas unitarias e integraciones se encuentran indexados y validados localmente.
+  - La Fase 6 (Panel administrativo pulido, sobrio, formal y con contraste validado en Modo Día y Modo Noche) y la Fase 7 (Catálogo cerrado de 13 actividades) quedan completamente unificadas y enlazadas.
+  - Al ejecutar `git push origin main` en el siguiente chat, GitHub Actions compilará la versión pública en verde sin discrepancias ni módulos faltantes.
+  - La versión pública permanece intacta hasta que el usuario dé la orden explícita en la siguiente fase.
+

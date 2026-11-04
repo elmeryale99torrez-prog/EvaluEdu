@@ -3,3 +3,4 @@ dist/
 .env.local
 *.bak
 supabase/.temp/
+promo-evaluedu/

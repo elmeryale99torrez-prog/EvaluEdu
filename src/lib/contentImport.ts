@@ -1,4 +1,6 @@
-import type { ActivityType, Activity, ActivityDetails, ChoiceOption, MatchingPair, SortingItem, ScenarioStage, ScenarioOption } from './activityEngine'
+import type { ActivityType, Activity, ActivityDetails, ChoiceOption, FillBlankSlot, SpotErrorSegment, MarkWordsToken, GridCheckRow, GridCheckColumn, MatchingPair, SortingItem, ScenarioStage, ScenarioOption } from './activityEngine'
+import { extractBlankMarkers } from './activities/fillBlanks'
+import { parseMarkWordsText } from './activities/markWords'
 
 export const CONTENT_SCHEMA_ID = 'edueval.content' as const
 export const CONTENT_SCHEMA_VERSION_V1 = 1 as const
@@ -67,6 +69,83 @@ export type ImportedSingleChoiceV2 = {
   explanation?: string
 }
 
+export type ImportedMultiSelectV2 = {
+  id?: string
+  type: 'multiSelect'
+  prompt: string
+  options: Array<{ id?: string; label: string; correct: boolean }>
+  hint: string
+  explanation?: string
+}
+
+export type ImportedFillBlanksV2 = {
+  id?: string
+  type: 'fillBlanks'
+  prompt: string
+  textWithBlanks: string
+  blanks: Array<{ id?: string; answer: string }>
+  distractors: string[]
+  hint: string
+  explanation?: string
+}
+
+export type ImportedSpotErrorV2 = {
+  id?: string
+  type: 'spotError'
+  prompt: string
+  segments: Array<{ id?: string; text: string; hasError: boolean }>
+  correction?: string
+  hint: string
+  explanation?: string
+}
+
+export type ImportedMarkWordsV2 = {
+  id?: string
+  type: 'markWords'
+  prompt: string
+  text: string
+  words?: Array<{ id?: string; text: string; correct: boolean }>
+  hint: string
+  explanation?: string
+}
+
+export type ImportedGridCheckV2 = {
+  id?: string
+  type: 'gridCheck'
+  prompt: string
+  rows: Array<{ id?: string; label: string }>
+  columns: Array<{ id?: string; label: string }>
+  expectedCells?: string[]
+  matrix?: Record<string, string[]>
+  hint: string
+  explanation?: string
+}
+
+export type ImportedVennDiagramV2 = {
+  id?: string
+  type: 'vennDiagram'
+  prompt: string
+  setA: string
+  setB: string
+  intersectionLabel?: string
+  items: Array<{ id?: string; label: string; zone: 'left' | 'both' | 'right' }>
+  hint: string
+  explanation?: string
+}
+
+export type ImportedShortAnswerV2 = {
+  id?: string
+  type: 'shortAnswer'
+  prompt: string
+  acceptedAnswers: string[]
+  caseSensitive?: boolean
+  ignoreAccents?: boolean
+  placeholder?: string
+  context?: string
+  hint: string
+  explanation?: string
+}
+
 export type ImportedMatchingV2 = {
   id?: string
   type: 'matching'
@@ -122,6 +201,13 @@ export type ImportedScenarioV2 = {
 export type ImportedActivityV2 =
   | ImportedTrueFalseV2
   | ImportedSingleChoiceV2
+  | ImportedMultiSelectV2
+  | ImportedFillBlanksV2
+  | ImportedSpotErrorV2
+  | ImportedMarkWordsV2
+  | ImportedGridCheckV2
+  | ImportedVennDiagramV2
+  | ImportedShortAnswerV2
   | ImportedMatchingV2
   | ImportedSortingV2
   | ImportedOrderingV2
@@ -182,6 +268,13 @@ export type ContentImportResult =
 const ACTIVITY_LABELS: Record<ActivityType, string> = {
   trueFalse: 'Falso y Verdadero',
   singleChoice: 'Selección Única',
+  multiSelect: 'Selección Múltiple',
+  fillBlanks: 'Completar Espacios',
+  spotError: 'Detección del Error',
+  markWords: 'Marcar Palabras',
+  gridCheck: 'Matriz de Doble Entrada',
+  vennDiagram: 'Diagrama de Venn',
+  shortAnswer: 'Respuesta Corta',
   matching: 'Asociación de Conceptos',
   sorting: 'Clasificación',
   ordering: 'Ordenamiento de Procesos',
@@ -320,6 +413,593 @@ function validateSingleChoiceActivity(
     details: {
       singleChoice: {
         options,
+        hint,
+        explanation: explanation || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateMultiSelectActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
+  if (!prompt) return { ok: false, reason: 'La pregunta (prompt) no puede estar vacía.' }
+  if (prompt.length > 600) return { ok: false, reason: 'La pregunta no puede superar 600 caracteres.' }
+
+  if (!Array.isArray(raw.options) || raw.options.length < 3 || raw.options.length > 6) {
+    return { ok: false, reason: 'Debe contener entre 3 y 6 opciones de respuesta.' }
+  }
+
+  const options: ChoiceOption[] = []
+  let correctCount = 0
+  let distractorCount = 0
+
+  for (let i = 0; i < raw.options.length; i++) {
+    const opt = raw.options[i]
+    if (!isRecord(opt)) return { ok: false, reason: `La opción [${i}] debe ser un objeto.` }
+    const label = typeof opt.label === 'string' ? opt.label.trim() : ''
+    if (!label) return { ok: false, reason: `El texto de la opción [${i}] no puede estar vacío.` }
+    const correct = Boolean(opt.correct)
+    if (correct) correctCount++
+    else distractorCount++
+    options.push({
+      id: typeof opt.id === 'string' && opt.id ? opt.id : `ms-opt-${index}-${i}`,
+      label,
+      correct,
+    })
+  }
+
+  if (correctCount < 2) {
+    return { ok: false, reason: `Debe tener al menos 2 respuestas correctas en Selección múltiple; se encontraron ${correctCount}.` }
+  }
+  if (distractorCount < 1) {
+    return { ok: false, reason: 'Debe incluir al menos 1 distractor (opción incorrecta).' }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+
+  const correctLabels = options.filter((opt) => opt.correct).map((opt) => opt.label)
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `ms-${Date.now()}-${index}`
+  const title = `${topic.title} · Selección Múltiple`
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'multiSelect',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: options.map((opt) => opt.label),
+    answer: correctLabels,
+    feedback: hint,
+    status: 'pending',
+    details: {
+      multiSelect: {
+        options,
+        hint,
+        explanation: explanation || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateFillBlanksActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' && raw.prompt.trim() ? raw.prompt.trim() : 'Completa los espacios del texto seleccionando las fichas correspondientes.'
+  if (prompt.length > 600) return { ok: false, reason: 'La instrucción no puede superar 600 caracteres.' }
+
+  const textWithBlanks = typeof raw.textWithBlanks === 'string' ? raw.textWithBlanks.trim() : ''
+  if (!textWithBlanks) return { ok: false, reason: 'El texto con espacios (textWithBlanks) no puede estar vacío.' }
+  if (textWithBlanks.length > 1600) return { ok: false, reason: 'El texto con espacios no puede superar 1600 caracteres.' }
+
+  if (!Array.isArray(raw.blanks) || raw.blanks.length < 1 || raw.blanks.length > 6) {
+    return { ok: false, reason: 'Debe contener entre 1 y 6 espacios para completar (blanks).' }
+  }
+
+  const blanks: FillBlankSlot[] = []
+  for (let i = 0; i < raw.blanks.length; i++) {
+    const item = raw.blanks[i]
+    if (typeof item === 'string') {
+      const ans = item.trim()
+      if (!ans) return { ok: false, reason: `La respuesta del espacio [${i}] no puede estar vacía.` }
+      blanks.push({ id: `fb-${index}-${i + 1}`, answer: ans })
+    } else if (isRecord(item)) {
+      const ans = typeof item.answer === 'string' ? item.answer.trim() : ''
+      if (!ans) return { ok: false, reason: `La respuesta del espacio [${i}] no puede estar vacía.` }
+      blanks.push({
+        id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : `fb-${index}-${i + 1}`,
+        answer: ans,
+      })
+    } else {
+      return { ok: false, reason: `El espacio [${i}] debe ser un objeto con "answer".` }
+    }
+  }
+
+  const markers = extractBlankMarkers(textWithBlanks)
+  for (let i = 1; i <= blanks.length; i++) {
+    if (!markers.includes(i)) {
+      return { ok: false, reason: `Falta el marcador {{${i}}} dentro del texto con espacios (textWithBlanks).` }
+    }
+  }
+
+  if (!Array.isArray(raw.distractors) || raw.distractors.length < 1 || raw.distractors.length > 6) {
+    return { ok: false, reason: 'Debe incluir entre 1 y 6 palabras distractoras (distractors).' }
+  }
+  const distractors = raw.distractors.map((d) => (typeof d === 'string' ? d.trim() : '')).filter(Boolean)
+  if (distractors.length < 1) {
+    return { ok: false, reason: 'Debe incluir al menos 1 palabra distractora válida.' }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `fb-${Date.now()}-${index}`
+  const title = `${topic.title} · Completa`
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'fillBlanks',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: [...blanks.map((b) => b.answer), ...distractors],
+    answer: blanks.map((b) => b.answer),
+    feedback: hint,
+    status: 'pending',
+    details: {
+      fillBlanks: {
+        textWithBlanks,
+        blanks,
+        distractors,
+        hint,
+        explanation: explanation || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateSpotErrorActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' && raw.prompt.trim()
+    ? raw.prompt.trim()
+    : 'Identifica cuál de los siguientes fragmentos contiene un error conceptual o procedimental.'
+  if (prompt.length > 600) return { ok: false, reason: 'La instrucción no puede superar 600 caracteres.' }
+
+  if (!Array.isArray(raw.segments) || raw.segments.length < 3 || raw.segments.length > 6) {
+    return { ok: false, reason: 'Debe contener entre 3 y 6 fragmentos para analizar (segments).' }
+  }
+
+  const segments: SpotErrorSegment[] = []
+  let errorCount = 0
+  for (let i = 0; i < raw.segments.length; i++) {
+    const seg = raw.segments[i]
+    if (!isRecord(seg)) return { ok: false, reason: `El fragmento [${i}] debe ser un objeto.` }
+    const text = typeof seg.text === 'string' ? seg.text.trim() : ''
+    if (!text) return { ok: false, reason: `El texto del fragmento [${i}] no puede estar vacío.` }
+    const hasError = seg.hasError === true
+    if (hasError) errorCount++
+    segments.push({
+      id: typeof seg.id === 'string' && seg.id.trim() ? seg.id.trim() : `se-${index}-${i + 1}`,
+      text,
+      hasError,
+    })
+  }
+
+  if (errorCount !== 1) {
+    return {
+      ok: false,
+      reason: `Debe existir exactamente 1 fragmento con error (hasError: true); se encontraron ${errorCount}.`,
+    }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const correction = typeof raw.correction === 'string' ? raw.correction.trim() : ''
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const errorSeg = segments.find((s) => s.hasError)!
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `se-${Date.now()}-${index}`
+  const title = `${topic.title} · Detección del Error`
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'spotError',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: segments.map((s) => s.text),
+    answer: errorSeg.text,
+    feedback: hint,
+    status: 'pending',
+    details: {
+      spotError: {
+        segments,
+        correction: correction || undefined,
+        hint,
+        explanation: explanation || correction || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateMarkWordsActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' && raw.prompt.trim()
+    ? raw.prompt.trim()
+    : 'Lee el siguiente texto y resalta con un toque las palabras o conceptos clave correspondientes.'
+  if (prompt.length > 600) return { ok: false, reason: 'La instrucción no puede superar 600 caracteres.' }
+
+  const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+  if (!text) return { ok: false, reason: 'El párrafo de lectura interactivo ("text") es obligatorio.' }
+  if (text.length > 2500) return { ok: false, reason: 'El texto no puede superar 2500 caracteres.' }
+
+  let words: MarkWordsToken[] = []
+  if (Array.isArray(raw.words) && raw.words.length > 0) {
+    for (let i = 0; i < raw.words.length; i++) {
+      const w = raw.words[i]
+      if (!isRecord(w)) return { ok: false, reason: `El término [${i}] debe ser un objeto.` }
+      const tokenText = typeof w.text === 'string' ? w.text.trim() : ''
+      if (!tokenText) return { ok: false, reason: `El texto del término [${i}] no puede estar vacío.` }
+      const isCorrect = w.correct === true
+      words.push({
+        id: typeof w.id === 'string' && w.id.trim() ? w.id.trim() : `mw-${index}-${i + 1}`,
+        text: tokenText,
+        correct: isCorrect,
+      })
+    }
+  } else {
+    const parsed = parseMarkWordsText(text)
+    words = parsed.tokens.map((t, i) => ({
+      id: `mw-${index}-${i + 1}`,
+      text: t.text,
+      correct: t.correct,
+    }))
+  }
+
+  if (words.length < 3 || words.length > 10) {
+    return { ok: false, reason: `Debe contener entre 3 y 10 términos interactivos delimitados entre corchetes [término]; se encontraron ${words.length}.` }
+  }
+
+  const correctCount = words.filter((w) => w.correct).length
+  const distractorCount = words.length - correctCount
+
+  if (correctCount < 1) {
+    return { ok: false, reason: 'Debe marcar al menos 1 término interactivo como correcto con asterisco [palabra*].' }
+  }
+  if (distractorCount < 1) {
+    return { ok: false, reason: 'Debe dejar al menos 1 término interactivo como distractor sin asterisco [palabra].' }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `mw-${Date.now()}-${index}`
+  const title = `${topic.title} · Marcar Palabras`
+
+  const correctWords = words.filter((w) => w.correct).map((w) => w.text)
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'markWords',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: words.map((w) => w.text),
+    answer: correctWords,
+    feedback: hint,
+    status: 'pending',
+    details: {
+      markWords: {
+        text,
+        words,
+        hint,
+        explanation: explanation || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateGridCheckActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' && raw.prompt.trim()
+    ? raw.prompt.trim()
+    : 'Marca en la matriz las casillas que corresponden a cada elemento según los criterios evaluados.'
+  if (prompt.length > 600) return { ok: false, reason: 'La instrucción no puede superar 600 caracteres.' }
+
+  if (!Array.isArray(raw.rows) || raw.rows.length < 2 || raw.rows.length > 6) {
+    return { ok: false, reason: 'Debe contener entre 2 y 6 filas para comparar (rows).' }
+  }
+
+  const rows: GridCheckRow[] = []
+  for (let r = 0; r < raw.rows.length; r++) {
+    const rowItem = raw.rows[r]
+    if (typeof rowItem === 'string') {
+      const label = rowItem.trim()
+      if (!label) return { ok: false, reason: `La fila [${r}] no puede estar vacía.` }
+      rows.push({ id: `r${r + 1}`, label })
+    } else if (isRecord(rowItem)) {
+      const label = typeof rowItem.label === 'string' ? rowItem.label.trim() : ''
+      if (!label) return { ok: false, reason: `La etiqueta de la fila [${r}] no puede estar vacía.` }
+      const id = typeof rowItem.id === 'string' && rowItem.id.trim() ? rowItem.id.trim() : `r${r + 1}`
+      rows.push({ id, label })
+    } else {
+      return { ok: false, reason: `La fila [${r}] debe ser un texto o un objeto con id y label.` }
+    }
+  }
+
+  if (!Array.isArray(raw.columns) || raw.columns.length < 2 || raw.columns.length > 5) {
+    return { ok: false, reason: 'Debe contener entre 2 y 5 columnas de criterios (columns).' }
+  }
+
+  const columns: GridCheckColumn[] = []
+  for (let c = 0; c < raw.columns.length; c++) {
+    const colItem = raw.columns[c]
+    if (typeof colItem === 'string') {
+      const label = colItem.trim()
+      if (!label) return { ok: false, reason: `La columna [${c}] no puede estar vacía.` }
+      columns.push({ id: `c${c + 1}`, label })
+    } else if (isRecord(colItem)) {
+      const label = typeof colItem.label === 'string' ? colItem.label.trim() : ''
+      if (!label) return { ok: false, reason: `La etiqueta de la columna [${c}] no puede estar vacía.` }
+      const id = typeof colItem.id === 'string' && colItem.id.trim() ? colItem.id.trim() : `c${c + 1}`
+      columns.push({ id, label })
+    } else {
+      return { ok: false, reason: `La columna [${c}] debe ser un texto o un objeto con id y label.` }
+    }
+  }
+
+  const rowIdSet = new Set(rows.map((r) => r.id.toLowerCase()))
+  const colIdSet = new Set(columns.map((c) => c.id.toLowerCase()))
+
+  const expectedCells: string[] = []
+  if (Array.isArray(raw.expectedCells)) {
+    for (const cell of raw.expectedCells) {
+      if (typeof cell === 'string' && cell.includes(':')) {
+        const [rId, cId] = cell.split(':').map((s) => s.trim())
+        if (rowIdSet.has(rId.toLowerCase()) && colIdSet.has(cId.toLowerCase())) {
+          const norm = `${rId}:${cId}`
+          if (!expectedCells.includes(norm)) expectedCells.push(norm)
+        }
+      }
+    }
+  } else if (isRecord(raw.matrix)) {
+    for (const [rId, colList] of Object.entries(raw.matrix)) {
+      if (Array.isArray(colList)) {
+        for (const cId of colList) {
+          if (typeof cId === 'string') {
+            const trimmedC = cId.trim()
+            if (rowIdSet.has(rId.toLowerCase()) && colIdSet.has(trimmedC.toLowerCase())) {
+              const norm = `${rId}:${trimmedC}`
+              if (!expectedCells.includes(norm)) expectedCells.push(norm)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (expectedCells.length < 1) {
+    return { ok: false, reason: 'Debe especificar al menos 1 celda correcta en la matriz (expectedCells).' }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `gc-${Date.now()}-${index}`
+  const title = `${topic.title} · Matriz`
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'gridCheck',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: rows.map((r) => r.label),
+    answer: expectedCells,
+    feedback: hint,
+    status: 'pending',
+    details: {
+      gridCheck: {
+        rows,
+        columns,
+        expectedCells,
+        hint,
+        explanation: explanation || hint,
+      },
+    },
+  }
+  return { ok: true, activity }
+}
+
+function validateShortAnswerActivityImport(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' ? raw.prompt.trim() : ''
+  if (!prompt || prompt.length < 5) {
+    return { ok: false, reason: `${path}.prompt: La consigna de respuesta corta debe tener al menos 5 caracteres.` }
+  }
+
+  const rawAccepted = Array.isArray(raw.acceptedAnswers)
+    ? raw.acceptedAnswers
+    : Array.isArray(raw.options)
+      ? raw.options
+      : (typeof raw.answer === 'string' ? [raw.answer] : [])
+
+  const acceptedAnswers = rawAccepted
+    .map((a) => (typeof a === 'string' ? a.trim() : ''))
+    .filter(Boolean)
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const placeholder = typeof raw.placeholder === 'string' ? raw.placeholder.trim() : 'Escribe tu respuesta aquí...'
+  const context = typeof raw.context === 'string' ? raw.context.trim() : undefined
+  const caseSensitive = raw.caseSensitive === true
+  const ignoreAccents = raw.ignoreAccents !== false
+
+  const partial: Partial<Activity> = {
+    title: (typeof raw.title === 'string' ? raw.title : '') || `${topic.title} · Respuesta Corta ${index + 1}`,
+    type: 'shortAnswer',
+    prompt,
+    feedback: hint || 'Evoca con precisión el concepto aprendido en este tema.',
+    options: acceptedAnswers,
+    answer: acceptedAnswers[0] || '',
+    details: {
+      shortAnswer: {
+        prompt,
+        acceptedAnswers,
+        caseSensitive,
+        ignoreAccents,
+        placeholder,
+        context,
+        hint: hint || 'Evoca con precisión el concepto aprendido en este tema.',
+        explanation: explanation || undefined,
+      },
+    },
+  }
+
+  if (acceptedAnswers.length === 0) {
+    return {
+      ok: false,
+      reason: `${path}.acceptedAnswers: Debes definir al menos una respuesta válida o sinónimo aceptado.`,
+      partial,
+    }
+  }
+
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `imp-sa-${Date.now()}-${index}`
+
+  return {
+    ok: true,
+    activity: {
+      id,
+      title: partial.title!,
+      type: 'shortAnswer',
+      topic: topic.subject,
+      difficulty: 'Intermedio',
+      prompt,
+      options: acceptedAnswers,
+      answer: acceptedAnswers[0],
+      feedback: hint || 'Evoca con precisión el concepto aprendido en este tema.',
+      details: partial.details,
+      status: 'pending',
+    },
+  }
+}
+
+function validateVennDiagramActivity(
+  raw: Record<string, unknown>,
+  path: string,
+  index: number,
+  topic: ImportedTopicV2
+): { ok: true; activity: Activity } | { ok: false; reason: string; partial?: Partial<Activity> } {
+  const prompt = typeof raw.prompt === 'string' && raw.prompt.trim()
+    ? raw.prompt.trim()
+    : 'Ubica cada elemento en la zona correspondiente del diagrama de Venn según sus propiedades.'
+  if (prompt.length > 600) return { ok: false, reason: 'La instrucción no puede superar 600 caracteres.' }
+
+  const setA = typeof raw.setA === 'string' ? raw.setA.trim() : ''
+  if (!setA) return { ok: false, reason: 'Debe especificar el nombre del Conjunto A ("setA").' }
+
+  const setB = typeof raw.setB === 'string' ? raw.setB.trim() : ''
+  if (!setB) return { ok: false, reason: 'Debe especificar el nombre del Conjunto B ("setB").' }
+
+  if (setA.toLowerCase() === setB.toLowerCase()) {
+    return { ok: false, reason: 'El Conjunto A y el Conjunto B deben ser distintos para permitir la comparación.' }
+  }
+
+  const intersectionLabel = typeof raw.intersectionLabel === 'string' && raw.intersectionLabel.trim()
+    ? raw.intersectionLabel.trim()
+    : 'Ambos / Compartido'
+
+  if (!Array.isArray(raw.items) || raw.items.length < 3 || raw.items.length > 8) {
+    return { ok: false, reason: 'Debe contener entre 3 y 8 elementos para clasificar en el diagrama (items).' }
+  }
+
+  const validZones = new Set(['left', 'both', 'right'])
+  const items: Array<{ id: string; label: string; zone: 'left' | 'both' | 'right' }> = []
+  let bothCount = 0
+  let exclusiveCount = 0
+
+  for (let i = 0; i < raw.items.length; i++) {
+    const it = raw.items[i]
+    if (!isRecord(it)) return { ok: false, reason: `El elemento [${i}] debe ser un objeto.` }
+    const label = typeof it.label === 'string' ? it.label.trim() : ''
+    if (!label) return { ok: false, reason: `El texto del elemento [${i}] no puede estar vacío.` }
+    const zoneRaw = typeof it.zone === 'string' ? it.zone.trim().toLowerCase() : ''
+    if (!validZones.has(zoneRaw)) {
+      return { ok: false, reason: `La zona del elemento [${i}] ("${label}") debe ser "left", "both" o "right".` }
+    }
+    const zone = zoneRaw as 'left' | 'both' | 'right'
+    if (zone === 'both') bothCount++
+    else exclusiveCount++
+
+    const id = typeof it.id === 'string' && it.id.trim() ? it.id.trim() : `v-${index}-${i + 1}`
+    items.push({ id, label, zone })
+  }
+
+  if (bothCount < 1) {
+    return { ok: false, reason: 'El diagrama de Venn debe contener al menos 1 elemento compartido en la intersección ("both").' }
+  }
+  if (exclusiveCount < 1) {
+    return { ok: false, reason: 'El diagrama de Venn debe contener al menos 1 elemento exclusivo ("left" o "right").' }
+  }
+
+  const hint = typeof raw.hint === 'string' ? raw.hint.trim() : ''
+  if (!hint) return { ok: false, reason: 'Debe incluir una pista pedagógica (hint) para el estudiante.' }
+  const explanation = typeof raw.explanation === 'string' ? raw.explanation.trim() : ''
+  const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : `venn-${Date.now()}-${index}`
+  const title = `${topic.title} · Diagrama de Venn`
+
+  const activity: Activity = {
+    id,
+    title,
+    type: 'vennDiagram',
+    topic: topic.subject,
+    difficulty: 'Intermedio',
+    prompt,
+    options: items.map((it) => it.label),
+    answer: items.filter((it) => it.zone === 'both').map((it) => it.label),
+    feedback: hint,
+    status: 'pending',
+    details: {
+      vennDiagram: {
+        setA,
+        setB,
+        intersectionLabel,
+        items,
         hint,
         explanation: explanation || hint,
       },
@@ -620,6 +1300,13 @@ export function validateV2Document(value: Record<string, unknown>): ContentImpor
   const variantsByType: VariantsGrouped = {
     trueFalse: { label: ACTIVITY_LABELS.trueFalse, valid: [], needsRepair: [] },
     singleChoice: { label: ACTIVITY_LABELS.singleChoice, valid: [], needsRepair: [] },
+    multiSelect: { label: ACTIVITY_LABELS.multiSelect, valid: [], needsRepair: [] },
+    fillBlanks: { label: ACTIVITY_LABELS.fillBlanks, valid: [], needsRepair: [] },
+    spotError: { label: ACTIVITY_LABELS.spotError, valid: [], needsRepair: [] },
+    markWords: { label: ACTIVITY_LABELS.markWords, valid: [], needsRepair: [] },
+    gridCheck: { label: ACTIVITY_LABELS.gridCheck, valid: [], needsRepair: [] },
+    vennDiagram: { label: ACTIVITY_LABELS.vennDiagram, valid: [], needsRepair: [] },
+    shortAnswer: { label: ACTIVITY_LABELS.shortAnswer, valid: [], needsRepair: [] },
     matching: { label: ACTIVITY_LABELS.matching, valid: [], needsRepair: [] },
     sorting: { label: ACTIVITY_LABELS.sorting, valid: [], needsRepair: [] },
     ordering: { label: ACTIVITY_LABELS.ordering, valid: [], needsRepair: [] },
@@ -640,14 +1327,14 @@ export function validateV2Document(value: Record<string, unknown>): ContentImpor
     }
 
     const type = typeof actRaw.type === 'string' ? actRaw.type : ''
-    const validTypes: ActivityType[] = ['trueFalse', 'singleChoice', 'matching', 'sorting', 'ordering', 'scenario']
+    const validTypes: ActivityType[] = ['trueFalse', 'singleChoice', 'multiSelect', 'fillBlanks', 'spotError', 'markWords', 'gridCheck', 'vennDiagram', 'shortAnswer', 'matching', 'sorting', 'ordering', 'scenario']
     if (!validTypes.includes(type as ActivityType)) {
       activitiesNeedingRepair.push({
         raw: actRaw,
         type: 'singleChoice',
         title: (typeof actRaw.prompt === 'string' ? actRaw.prompt : '') || `Actividad ${index + 1}`,
         prompt: '',
-        reason: `${actPath}.type: Tipo de actividad desconocido "${type}". Debe ser uno de los 6 formatos admitidos.`,
+        reason: `${actPath}.type: Tipo de actividad desconocido "${type}". Debe ser uno de los formatos admitidos.`,
       })
       return
     }
@@ -661,6 +1348,27 @@ export function validateV2Document(value: Record<string, unknown>): ContentImpor
         break
       case 'singleChoice':
         result = validateSingleChoiceActivity(actRaw, actPath, index, topic)
+        break
+      case 'multiSelect':
+        result = validateMultiSelectActivity(actRaw, actPath, index, topic)
+        break
+      case 'fillBlanks':
+        result = validateFillBlanksActivity(actRaw, actPath, index, topic)
+        break
+      case 'spotError':
+        result = validateSpotErrorActivity(actRaw, actPath, index, topic)
+        break
+      case 'markWords':
+        result = validateMarkWordsActivity(actRaw, actPath, index, topic)
+        break
+      case 'gridCheck':
+        result = validateGridCheckActivity(actRaw, actPath, index, topic)
+        break
+      case 'vennDiagram':
+        result = validateVennDiagramActivity(actRaw, actPath, index, topic)
+        break
+      case 'shortAnswer':
+        result = validateShortAnswerActivityImport(actRaw, actPath, index, topic)
         break
       case 'matching':
         result = validateMatchingActivity(actRaw, actPath, index, topic)
@@ -680,7 +1388,7 @@ export function validateV2Document(value: Record<string, unknown>): ContentImpor
       validActivities.push(result.activity)
       variantsByType[actType].valid.push(result.activity)
     } else {
-      const promptText = typeof actRaw.prompt === 'string' ? actRaw.prompt : typeof actRaw.statement === 'string' ? actRaw.statement : typeof actRaw.situation === 'string' ? actRaw.situation : ''
+      const promptText = typeof actRaw.prompt === 'string' ? actRaw.prompt : typeof actRaw.textWithBlanks === 'string' ? actRaw.textWithBlanks : typeof actRaw.statement === 'string' ? actRaw.statement : typeof actRaw.situation === 'string' ? actRaw.situation : ''
       const itemNeedingRepair: ActivityNeedingRepair = {
         raw: actRaw,
         type: actType,
@@ -702,6 +1410,34 @@ export function validateV2Document(value: Record<string, unknown>): ContentImpor
     singleChoice: {
       available: variantsByType.singleChoice.valid.length > 0,
       reason: variantsByType.singleChoice.valid.length > 0 ? `${variantsByType.singleChoice.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    multiSelect: {
+      available: variantsByType.multiSelect.valid.length > 0,
+      reason: variantsByType.multiSelect.valid.length > 0 ? `${variantsByType.multiSelect.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    fillBlanks: {
+      available: variantsByType.fillBlanks.valid.length > 0,
+      reason: variantsByType.fillBlanks.valid.length > 0 ? `${variantsByType.fillBlanks.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    spotError: {
+      available: variantsByType.spotError.valid.length > 0,
+      reason: variantsByType.spotError.valid.length > 0 ? `${variantsByType.spotError.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    markWords: {
+      available: variantsByType.markWords.valid.length > 0,
+      reason: variantsByType.markWords.valid.length > 0 ? `${variantsByType.markWords.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    gridCheck: {
+      available: variantsByType.gridCheck.valid.length > 0,
+      reason: variantsByType.gridCheck.valid.length > 0 ? `${variantsByType.gridCheck.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    vennDiagram: {
+      available: variantsByType.vennDiagram.valid.length > 0,
+      reason: variantsByType.vennDiagram.valid.length > 0 ? `${variantsByType.vennDiagram.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
+    },
+    shortAnswer: {
+      available: variantsByType.shortAnswer.valid.length > 0,
+      reason: variantsByType.shortAnswer.valid.length > 0 ? `${variantsByType.shortAnswer.valid.length} variantes listas` : 'No se incluyeron variantes válidas de este formato.',
     },
     matching: {
       available: variantsByType.matching.valid.length > 0,
@@ -860,6 +1596,13 @@ export function detectContentCompatibility(content: ImportedContent): ContentCom
   return {
     trueFalse: { available: hasConcepts || hasSituations, reason: 'Agrega un concepto con definición o una situación completa.' },
     singleChoice: { available: hasConcepts || hasSituations, reason: 'Agrega conceptos o una situación completa.' },
+    multiSelect: { available: concepts.length >= 2 || hasSituations, reason: 'Agrega al menos dos conceptos con definición o una situación completa.' },
+    fillBlanks: { available: hasConcepts, reason: 'Agrega al menos un concepto con definición para construir el texto con espacios.' },
+    spotError: { available: concepts.length >= 2 || hasSteps, reason: 'Agrega al menos dos conceptos con definición o pasos de un proceso.' },
+    markWords: { available: hasConcepts, reason: 'Agrega al menos un concepto con definición para construir el texto de lectura.' },
+    gridCheck: { available: concepts.length >= 2, reason: 'Agrega al menos dos conceptos con definición para contrastar en la matriz.' },
+    vennDiagram: { available: concepts.length >= 2, reason: 'Agrega al menos dos conceptos para contrastar en el diagrama de Venn.' },
+    shortAnswer: { available: concepts.length >= 1, reason: 'Agrega al menos un concepto con definición para formular preguntas de respuesta corta.' },
     matching: { available: concepts.length >= 2, reason: 'Agrega al menos dos conceptos con definición.' },
     sorting: { available: hasCategories && hasConcepts, reason: 'Agrega al menos dos categorías y un concepto con definición.' },
     ordering: { available: hasSteps, reason: 'Agrega al menos dos pasos de proceso.' },
@@ -868,7 +1611,7 @@ export function detectContentCompatibility(content: ImportedContent): ContentCom
 }
 
 // ==========================================
-// PROMPT OFICIAL V1.2 (PROBADO EN AULA)
+// PROMPT OFICIAL V1.3 (PROBADO EN AULA)
 // ==========================================
 
 export const OFFICIAL_IMPORT_PROMPT = `Actúa como un especialista en evaluación y pedagogía universitaria. Tu tarea es analizar el material académico adjunto (documento, informe o diapositivas PPTX) y transformarlo en un BANCO DE ACTIVIDADES EVALUABLES estructuradas en formato JSON estricto para la plataforma EvaluEdu.
@@ -877,13 +1620,20 @@ REGLAS CRÍTICAS DE CALIDAD, VARIEDAD Y CONTENIDO:
 1. CONFINAMIENTO DOCUMENTAL Y CERO INVENCIÓN: Basa todas las actividades única y exclusivamente en los conceptos, hechos, procedimientos, normativas y casos explícitamente explicados en el cuerpo del material. No inventes datos ni consultes enlaces web o referencias bibliográficas citadas.
 2. BANCO DE VARIANTES (OBJETIVO PRIORITARIO: 2 A 4 POR TIPO): No te limites a 1 sola actividad por formato. Explota los distintos conceptos y temas del material para generar un banco variado con MÚLTIPLES ACTIVIDADES de cada tipo compatible (idealmente entre 2 y 4 variantes por tipo). Por ejemplo: 3 o 4 afirmaciones distintas de Falso/Verdadero sobre varios temas, 3 o 4 preguntas de Selección Única, etc. En total, tu banco debería contener entre 8 y 16 actividades si el material lo permite.
 3. FLEXIBILIDAD EN MATERIALES BREVES (DIAPOSITIVAS): Si el material es sintético o en diapositivas y un formato solo da para 1 o 2 variantes sólidas, genera solo esas. Si NO hay contenido suficiente para sostener un formato con rigor (por ejemplo, si no hay secuencias para Ordenamiento o situaciones para Escenarios), OMITE por completo ese formato. Jamás fuerces una actividad sin respaldo claro en el texto.
-4. PISTA PEDAGÓGICA (hint): Debe ser una orientación conceptual breve y reflexiva para el estudiante que NO revele directa ni indirectamente la respuesta.
+4. PISTA PEDAGÓGICA (hint): Debe ser una orientación conceptual breve y reflexiva para el estudiante que NO revele directa ni indirectamente la respuesta ni cuántas opciones son correctas.
 5. PROHIBICIÓN EN SELECCIÓN: Prohibido usar opciones como "Todas las anteriores", "Ninguna de las anteriores" o similares. Los distractores deben ser opciones plausibles extraídas del tema.
 6. FORMATO DE SALIDA: Devuelve ÚNICAMENTE el bloque JSON válido, sin textos introductorios, saludos ni explicaciones fuera del JSON.
 
-ESPECIFICACIÓN DE LOS 6 FORMATOS:
+ESPECIFICACIÓN DE LOS FORMATOS:
 - trueFalse: Enunciado verificable ("statement"), clave ("correct": true/false) y pista ("hint").
 - singleChoice: Pregunta ("prompt"), 3 o 4 "options" con id, label y correct (exactamente una true) y pista ("hint").
+- multiSelect: Pregunta ("prompt"), 4 a 6 "options" con id, label y correct (al menos 2 true y al menos 1 false) y pista ("hint").
+- fillBlanks: Instrucción ("prompt"), párrafo con marcadores {{1}}, {{2}} ("textWithBlanks"), lista ordenada de espacios ("blanks": [{ "id": "b-1", "answer": "..." }]), 2 a 4 palabras distractoras ("distractors": ["..."]) y pista ("hint").
+- spotError: Instrucción ("prompt"), 3 a 5 fragmentos ("segments": [{ "id": "seg-1", "text": "...", "hasError": false }]) donde exactamente 1 tiene "hasError": true, corrección privada ("correction") y pista ("hint").
+- markWords: Instrucción ("prompt"), párrafo interactivo con palabras clave entre corchetes ("text": "En el texto, la [energía solar*] y el [viento*] son fuentes renovables, mientras que el [carbón] es contaminante."), donde el asterisco marca los términos correctos y la ausencia de asterisco marca distractores, y pista ("hint").
+- gridCheck: Matriz comparativa ("prompt"), 2 a 4 filas ("rows": [{ "id": "r1", "label": "..." }]), 2 a 4 columnas de criterios ("columns": [{ "id": "c1", "label": "..." }]), lista de celdas correctas ("expectedCells": ["r1:c1", "r2:c2"]) y pista ("hint").
+- vennDiagram: Comparación de conjuntos ("prompt"), nombre del conjunto A ("setA"), nombre del conjunto B ("setB"), etiqueta opcional de intersección ("intersectionLabel": "Ambos / Compartido"), 3 a 8 elementos a clasificar ("items": [{ "id": "v1", "label": "...", "zone": "left" | "both" | "right" }]) donde al menos 1 tiene zone: "both", y pista ("hint").
+- shortAnswer: Pregunta directa de evocación ("prompt"), lista de 1 a 6 respuestas o sinónimos válidos ("acceptedAnswers": ["término 1", "término 2"]), tolerancia a mayúsculas ("caseSensitive": false), tolerancia a tildes ("ignoreAccents": true), texto de ayuda ("placeholder") y pista formativa ("hint").
 - matching: Instrucción ("prompt"), 2 a 5 "pairs" con id, left y right y pista ("hint").
 - sorting: Instrucción ("prompt"), 2 a 4 "categories" y 3 a 8 "items" con id, label y category (cada ítem asignado a su categoría exacta) y pista ("hint").
 - ordering: Instrucción ("prompt"), 3 a 6 "steps" ordenados en secuencia exacta según el material y pista ("hint").
@@ -960,6 +1710,45 @@ ESTRUCTURA DEL JSON A DEVOLVER (Observa que los tipos se repiten para formar el 
     },
     {
       "id": "act-7",
+      "type": "gridCheck",
+      "prompt": "Compara las características en la matriz...",
+      "rows": [
+        { "id": "r1", "label": "Concepto A" },
+        { "id": "r2", "label": "Concepto B" }
+      ],
+      "columns": [
+        { "id": "c1", "label": "Criterio 1" },
+        { "id": "c2", "label": "Criterio 2" }
+      ],
+      "expectedCells": ["r1:c1", "r2:c2"],
+      "hint": "..."
+    },
+    {
+      "id": "act-venn",
+      "type": "vennDiagram",
+      "prompt": "Ubica cada característica en el diagrama de Venn:",
+      "setA": "Concepto A",
+      "setB": "Concepto B",
+      "intersectionLabel": "Ambos / Compartido",
+      "items": [
+        { "id": "v1", "label": "Propiedad exclusiva de A", "zone": "left" },
+        { "id": "v2", "label": "Propiedad común a ambos", "zone": "both" },
+        { "id": "v3", "label": "Propiedad exclusiva de B", "zone": "right" }
+      ],
+      "hint": "..."
+    },
+    {
+      "id": "act-short",
+      "type": "shortAnswer",
+      "prompt": "¿Cuál es el término exacto para...?",
+      "acceptedAnswers": ["Respuesta principal", "Sinónimo aceptado"],
+      "caseSensitive": false,
+      "ignoreAccents": true,
+      "placeholder": "Escribe tu respuesta aquí...",
+      "hint": "..."
+    },
+    {
+      "id": "act-8",
       "type": "ordering",
       "prompt": "Ordena la secuencia...",
       "steps": ["Paso 1", "Paso 2", "Paso 3"],

@@ -99,6 +99,22 @@ function runtime(activity: AnyRecord) {
   const sortingItems = options.map((label, index) => ({ id: `fallback-item-${index}`, label, category: sortingAnswer[index] ?? 'Sin categoría' }))
   const orderingSteps = Array.isArray(answer) ? answer : options
   const choiceOptions = options.map((label, index) => ({ id: `fallback-choice-${index}`, label, correct: label === answer }))
+  const multiSelectAnswer = new Set(Array.isArray(answer) ? answer : [])
+  const multiSelectOptions = options.map((label, index) => ({ id: `fallback-ms-${index}`, label, correct: multiSelectAnswer.has(label) }))
+  const fillBlanksAnswer = Array.isArray(answer) ? answer : [String(answer ?? '')]
+  const fallbackBlanks = fillBlanksAnswer.filter(Boolean).map((ans, index) => ({ id: String(index + 1), answer: String(ans) }))
+  const spotErrorSegments = options.map((text, index) => ({ id: `fallback-se-${index + 1}`, text, hasError: text === answer }))
+  const markWordsAnswer = new Set(Array.isArray(answer) ? answer : [String(answer ?? '')])
+  const markWordsTokens = options.map((text, index) => ({ id: `fallback-mw-${index + 1}`, text, correct: markWordsAnswer.has(text) }))
+  const gridCheckRows = details.gridCheck?.rows ?? [
+    { id: 'r1', label: options[0] ?? 'Elemento 1' },
+    { id: 'r2', label: options[1] ?? 'Elemento 2' },
+  ]
+  const gridCheckColumns = details.gridCheck?.columns ?? [
+    { id: 'c1', label: 'Criterio A' },
+    { id: 'c2', label: 'Criterio B' },
+  ]
+  const gridCheckExpected = details.gridCheck?.expectedCells ?? (Array.isArray(answer) ? answer : [String(answer ?? '')]).filter(Boolean)
   return {
     scenario: details.scenario ?? { situation: activity.prompt, stages: [{ id: 'fallback-stage', title: 'Decisión', prompt: activity.prompt, options: scenarioOptions }] },
     trueFalse: details.trueFalse ?? { statement: activity.prompt, correct: answer === 'Verdadero', explanation: activity.feedback },
@@ -106,7 +122,31 @@ function runtime(activity: AnyRecord) {
     sorting: details.sorting ?? { categories: Array.from(new Set(sortingAnswer)), items: sortingItems },
     ordering: details.ordering ?? { steps: orderingSteps },
     singleChoice: details.singleChoice ?? { options: choiceOptions },
+    multiSelect: details.multiSelect ?? { options: multiSelectOptions },
+    fillBlanks: details.fillBlanks ?? { textWithBlanks: activity.prompt, blanks: fallbackBlanks, distractors: options },
+    spotError: details.spotError ?? { segments: spotErrorSegments },
+    markWords: details.markWords ?? { text: activity.prompt, words: markWordsTokens },
+    gridCheck: details.gridCheck ?? { rows: gridCheckRows, columns: gridCheckColumns, expectedCells: gridCheckExpected },
+    vennDiagram: details.vennDiagram ?? {
+      setA: 'Conjunto A',
+      setB: 'Conjunto B',
+      intersectionLabel: 'Ambos',
+      items: options.map((label: string, index: number) => ({
+        id: `fallback-venn-${index + 1}`,
+        label,
+        zone: index % 3 === 0 ? 'left' : index % 3 === 1 ? 'both' : 'right',
+      })),
+    },
   }
+}
+
+function normalizeShortAnswerText(text: string, caseSensitive: boolean, ignoreAccents: boolean): string {
+  let res = text.trim().replace(/\s+/g, ' ')
+  if (!caseSensitive) res = res.toLowerCase()
+  if (ignoreAccents) {
+    res = res.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  }
+  return res
 }
 
 function isComplete(activity: AnyRecord, response: AnyRecord): boolean {
@@ -118,8 +158,18 @@ function isComplete(activity: AnyRecord, response: AnyRecord): boolean {
     const choices = record(response.choices)
     return stages.length > 0 && stages.every((stage: AnyRecord) => Boolean(choices[stage.id]))
   }
-  if (response.type === 'trueFalse' || response.type === 'singleChoice') {
-    return Boolean(response.value)
+  if (response.type === 'trueFalse' || response.type === 'singleChoice' || response.type === 'spotError' || response.type === 'shortAnswer') {
+    return Boolean(response.value && String(response.value).trim())
+  }
+  if (response.type === 'multiSelect' || response.type === 'markWords' || response.type === 'gridCheck') {
+    const values = arrayOfStrings(response.values)
+    return values.length > 0
+  }
+  if (response.type === 'fillBlanks') {
+    const blanks = current.fillBlanks.blanks ?? []
+    const answers = record(response.answers)
+    const chosen = blanks.map((b: AnyRecord) => String(answers[b.id] ?? '').trim())
+    return blanks.length > 0 && chosen.every(Boolean) && new Set(chosen).size === blanks.length
   }
   if (response.type === 'matching') {
     const pairs = current.matching.pairs ?? []
@@ -136,6 +186,14 @@ function isComplete(activity: AnyRecord, response: AnyRecord): boolean {
     const order = Array.isArray(response.order) ? response.order : []
     return order.length === steps.length && new Set(order).size === steps.length
   }
+  if (response.type === 'vennDiagram') {
+    const items = current.vennDiagram.items ?? []
+    const assignments = record(response.assignments)
+    return items.length > 0 && items.every((item: AnyRecord) => {
+      const z = assignments[item.id]
+      return z === 'left' || z === 'both' || z === 'right'
+    })
+  }
   return false
 }
 
@@ -143,8 +201,16 @@ function isOmitted(activity: AnyRecord, response: AnyRecord | undefined | null):
   if (!response) return true
   if (response.type !== activity.type) return true
 
-  if (response.type === 'trueFalse' || response.type === 'singleChoice') {
-    return !response.value
+  if (response.type === 'trueFalse' || response.type === 'singleChoice' || response.type === 'spotError') {
+    return !response.value || !String(response.value).trim()
+  }
+  if (response.type === 'multiSelect' || response.type === 'markWords' || response.type === 'gridCheck') {
+    const values = arrayOfStrings(response.values)
+    return values.length === 0 || values.every((val) => !val.trim())
+  }
+  if (response.type === 'fillBlanks') {
+    const answers = record(response.answers)
+    return Object.keys(answers).length === 0 || Object.values(answers).every((val) => !String(val ?? '').trim())
   }
   if (response.type === 'matching') {
     const pairs = record(response.pairs)
@@ -157,6 +223,10 @@ function isOmitted(activity: AnyRecord, response: AnyRecord | undefined | null):
   if (response.type === 'ordering') {
     const order = Array.isArray(response.order) ? response.order : []
     return order.length === 0
+  }
+  if (response.type === 'vennDiagram') {
+    const assignments = record(response.assignments)
+    return Object.keys(assignments).length === 0 || Object.values(assignments).every((val) => !val)
   }
   if (response.type === 'scenario') {
     const choices = record(response.choices)
@@ -191,6 +261,57 @@ function compare(activity: AnyRecord, response: AnyRecord): boolean {
     return option?.correct === true
   }
 
+  if (response.type === 'spotError') {
+    const segments = current.spotError.segments ?? []
+    const seg = segments.find((s: AnyRecord) => s.id === response.value || s.text === response.value)
+    return seg?.hasError === true
+  }
+
+  if (response.type === 'markWords') {
+    const words = current.markWords.words ?? []
+    const values = arrayOfStrings(response.values).map((v) => v.trim()).filter(Boolean)
+    if (values.length === 0) return false
+    const selectedTokens = values
+      .map((val) => words.find((w: AnyRecord) => w.id === val || String(w.text ?? '').toLowerCase() === val.toLowerCase()))
+      .filter(Boolean) as AnyRecord[]
+    if (selectedTokens.length !== values.length) return false
+    const selectedIds = new Set(selectedTokens.map((t) => t.id))
+    const expectedTokens = words.filter((w: AnyRecord) => w.correct === true)
+    if (expectedTokens.length === 0) return false
+    const expectedIds = new Set(expectedTokens.map((t) => t.id))
+    const hasAllExpected = [...expectedIds].every((id) => selectedIds.has(id))
+    const hasNoDistractors = selectedTokens.every((t) => t.correct === true)
+    return hasAllExpected && hasNoDistractors && selectedIds.size === expectedIds.size
+  }
+
+  if (response.type === 'gridCheck') {
+    const expected = new Set(arrayOfStrings(current.gridCheck.expectedCells).map((c) => c.trim().toLowerCase()))
+    const values = arrayOfStrings(response.values).map((v) => v.trim().toLowerCase()).filter(Boolean)
+    if (expected.size === 0 || values.length === 0) return false
+    const selected = new Set(values)
+    if (selected.size !== expected.size) return false
+    return [...expected].every((cell) => selected.has(cell))
+  }
+
+  if (response.type === 'multiSelect') {
+    const options = current.multiSelect.options ?? []
+    const values = arrayOfStrings(response.values)
+    const selectedOptions = values
+      .map((val) => options.find((opt: AnyRecord) => opt.id === val || opt.label === val))
+      .filter(Boolean) as AnyRecord[]
+    if (selectedOptions.length !== values.length) return false
+    const selectedIds = new Set(selectedOptions.map((opt) => opt.id))
+    if (selectedIds.size !== values.length) return false
+    const correctIds = new Set(options.filter((opt: AnyRecord) => opt.correct === true).map((opt: AnyRecord) => opt.id))
+    return correctIds.size > 0 && selectedIds.size === correctIds.size && [...correctIds].every((id) => selectedIds.has(id))
+  }
+
+  if (response.type === 'fillBlanks') {
+    const blanks = current.fillBlanks.blanks ?? []
+    const answers = record(response.answers)
+    return blanks.length > 0 && blanks.every((b: AnyRecord) => String(answers[b.id] ?? '').trim() === String(b.answer ?? '').trim())
+  }
+
   if (response.type === 'matching') {
     const pairs = current.matching.pairs ?? []
     const userPairs = record(response.pairs)
@@ -208,16 +329,24 @@ function compare(activity: AnyRecord, response: AnyRecord): boolean {
     const order = Array.isArray(response.order) ? response.order : []
     return order.every((step: string, index: number) => step === steps[index])
   }
+  if (response.type === 'vennDiagram') {
+    const items = current.vennDiagram.items ?? []
+    const assignments = record(response.assignments)
+    return items.length > 0 && items.every((item: AnyRecord) => assignments[item.id] === item.zone)
+  }
 
   return false
 }
 
 function serialize(response: AnyRecord): string {
   if (response.type === 'scenario') return Object.entries(record(response.choices)).map(([stage, choice]) => `${stage}: ${choice}`).join(' | ')
-  if (response.type === 'trueFalse' || response.type === 'singleChoice') return String(response.value ?? '')
+  if (response.type === 'trueFalse' || response.type === 'singleChoice' || response.type === 'spotError' || response.type === 'shortAnswer') return String(response.value ?? '').trim()
+  if (response.type === 'multiSelect' || response.type === 'markWords' || response.type === 'gridCheck') return arrayOfStrings(response.values).join(' | ')
+  if (response.type === 'fillBlanks') return Object.entries(record(response.answers)).map(([id, val]) => `[${id}: ${val}]`).join(' | ')
   if (response.type === 'matching') return Object.entries(record(response.pairs)).map(([left, right]) => `${left} → ${right}`).join(' | ')
   if (response.type === 'sorting') return Object.entries(record(response.assignments)).map(([item, category]) => `${item} → ${category}`).join(' | ')
   if (response.type === 'ordering') return Array.isArray(response.order) ? response.order.join(' → ') : ''
+  if (response.type === 'vennDiagram') return Object.entries(record(response.assignments)).map(([item, zone]) => `${item} → ${zone}`).join(' | ')
   return ''
 }
 
@@ -227,13 +356,24 @@ function publicActivity(activity: AnyRecord) {
     ? [...current.ordering.steps].reverse()
     : (current.ordering.steps.length === 2 ? [current.ordering.steps[1], current.ordering.steps[0]] : current.ordering.steps)
 
+  const fillBlanksBank = Array.from(
+    new Set([
+      ...(current.fillBlanks.blanks ?? []).map((b: AnyRecord) => String(b.answer ?? '').trim()).filter(Boolean),
+      ...arrayOfStrings(current.fillBlanks.distractors).map((d) => d.trim()).filter(Boolean),
+    ]),
+  ).sort((a, b) => a.localeCompare(b, 'es'))
+
   const safeOptions = activity.type === 'matching'
     ? current.matching.pairs.map((pair: AnyRecord) => pair.right)
     : activity.type === 'sorting'
       ? current.sorting.items.map((item: AnyRecord) => item.label)
+      : activity.type === 'vennDiagram'
+        ? (current.vennDiagram.items ?? []).map((item: AnyRecord) => item.label)
       : activity.type === 'ordering'
         ? safeOrderingSteps
-        : arrayOfStrings(activity.options)
+        : activity.type === 'fillBlanks'
+          ? fillBlanksBank
+          : arrayOfStrings(activity.options)
   const safeDetails: AnyRecord = {
     scenario: { situation: current.scenario.situation, stages: current.scenario.stages.map((stage: AnyRecord) => ({ id: stage.id, title: stage.title, prompt: stage.prompt, options: stage.options.map((option: AnyRecord) => ({ id: option.id, text: option.text, consequence: option.consequence, feedback: option.feedback })) })) },
     trueFalse: { statement: current.trueFalse.statement, explanation: current.trueFalse.explanation },
@@ -241,6 +381,30 @@ function publicActivity(activity: AnyRecord) {
     sorting: { categories: arrayOfStrings(current.sorting.categories), items: current.sorting.items.map((item: AnyRecord) => ({ id: item.id, label: item.label, category: '' })) },
     ordering: { steps: safeOrderingSteps },
     singleChoice: { options: current.singleChoice.options.map((option: AnyRecord) => ({ id: option.id, label: option.label, correct: false })) },
+    multiSelect: { options: current.multiSelect.options.map((option: AnyRecord) => ({ id: option.id, label: option.label, correct: false })) },
+    fillBlanks: {
+      textWithBlanks: current.fillBlanks.textWithBlanks,
+      blanks: (current.fillBlanks.blanks ?? []).map((b: AnyRecord) => ({ id: b.id, answer: '' })),
+      distractors: [],
+      bank: fillBlanksBank,
+    },
+    spotError: {
+      segments: (current.spotError.segments ?? []).map((s: AnyRecord) => ({ id: s.id, text: s.text, hasError: false })),
+    },
+    markWords: {
+      text: current.markWords.text,
+      words: (current.markWords.words ?? []).map((w: AnyRecord) => ({ id: w.id, text: w.text, correct: false })),
+    },
+    gridCheck: {
+      rows: (current.gridCheck.rows ?? []).map((r: AnyRecord) => ({ id: r.id, label: r.label })),
+      columns: (current.gridCheck.columns ?? []).map((c: AnyRecord) => ({ id: c.id, label: c.label })),
+    },
+    vennDiagram: {
+      setA: current.vennDiagram.setA,
+      setB: current.vennDiagram.setB,
+      intersectionLabel: current.vennDiagram.intersectionLabel,
+      items: (current.vennDiagram.items ?? []).map((item: AnyRecord) => ({ id: item.id, label: item.label, zone: '' })),
+    },
   }
   return { id: activity.id, template_id: activity.template_id, type: activity.type, title: activity.title, topic: activity.topic, difficulty: activity.difficulty, prompt: activity.prompt, options: safeOptions, feedback: activity.feedback, details: safeDetails, status: activity.status }
 }
