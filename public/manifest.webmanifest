@@ -1,6 +1,6 @@
 {
   "id": "./",
-  "name": "EvaluEdu · evaluación activa",
+  "name": "EvaluEdu 2.0 · evaluación activa",
   "short_name": "EvaluEdu",
   "description": "Crea, comparte y resuelve evaluaciones activas con la Chispa de aprendizaje.",
   "lang": "es",
@@ -9,13 +9,36 @@
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#0a0d0f",
-  "theme_color": "#165c4d",
-  "categories": ["education", "productivity"],
+  "background_color": "#111315",
+  "theme_color": "#3456b2",
+  "categories": [
+    "education",
+    "productivity"
+  ],
   "icons": [
-    { "src": "./icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
-    { "src": "./icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
   ]
 }

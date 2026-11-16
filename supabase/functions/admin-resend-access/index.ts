@@ -48,11 +48,12 @@ Deno.serve(async (request) => {
   const callerClient = createClient(supabaseUrl, publishableKey, { global: { headers: { Authorization: `Bearer ${token}` } } })
   const { data: authData, error: authError } = await callerClient.auth.getUser(token)
   if (authError || !authData.user) return json({ error: 'Sesión no válida.' }, 401)
-  const { data: callerProfile, error: profileError } = await callerClient.from('profiles').select('role').eq('id', authData.user.id).maybeSingle()
+  const { data: callerProfile, error: profileError } = await callerClient.from('profiles').select('role, roles').eq('id', authData.user.id).maybeSingle()
   if (profileError) return json({ error: profileError.message }, 500)
-  if (callerProfile?.role !== 'admin') return json({ error: 'Solo un administrador puede reenviar accesos.' }, 403)
+  const isCallerAdmin = callerProfile?.role === 'admin' || callerProfile?.role === 'superadmin' || (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('admin') || callerProfile.roles.includes('superadmin')))
+  if (!isCallerAdmin) return json({ error: 'Solo un administrador puede reenviar accesos.' }, 403)
 
-  let body: { email?: unknown; redirectTo?: unknown }
+  let body: { email?: unknown; redirectTo?: unknown; institutionId?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -60,6 +61,8 @@ Deno.serve(async (request) => {
   }
   const email = String(body.email ?? '').trim().toLowerCase()
   const redirectTo = validateRedirectTo(body.redirectTo)
+  const requestedInstId = typeof body.institutionId === 'string' && body.institutionId.trim() ? body.institutionId.trim() : null
+
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) return json({ error: 'Escribe un correo electrónico válido.' }, 400)
   if (redirectTo === null) return json({ error: 'La dirección de recuperación no está permitida.' }, 400)
 
@@ -69,16 +72,53 @@ Deno.serve(async (request) => {
   const targetUser = authUsers.users.find((user) => user.email?.toLowerCase() === email)
   if (!targetUser) return json({ error: 'No existe una cuenta con ese correo.' }, 404)
 
-  const { data: targetProfile, error: targetProfileError } = await adminClient.from('profiles').select('role').eq('id', targetUser.id).maybeSingle()
+  // RC-FIX-02 (LAB-RC-001): display_name se usa en la auditoría; debe seleccionarse.
+  const { data: targetProfile, error: targetProfileError } = await adminClient.from('profiles').select('role, roles, display_name').eq('id', targetUser.id).maybeSingle()
   if (targetProfileError) return json({ error: targetProfileError.message }, 500)
-  if (targetProfile?.role !== 'teacher') return json({ error: 'Solo se pueden reenviar accesos docentes desde esta pantalla.' }, 403)
+  const isTargetAdmin = targetProfile?.role === 'admin' || targetProfile?.role === 'superadmin' || (Array.isArray(targetProfile?.roles) && (targetProfile.roles.includes('admin') || targetProfile.roles.includes('superadmin')))
+  if (isTargetAdmin) return json({ error: 'Solo se pueden reenviar accesos a docentes, no a cuentas administrativas.' }, 403)
+
+  // Verificar alcance institucional si el llamador es director local
+  const isExplicitSuperadmin =
+    callerProfile?.role === 'superadmin' ||
+    callerProfile?.role === 'platform_admin' ||
+    (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('superadmin') || callerProfile.roles.includes('platform_admin')))
+
+  if (!isExplicitSuperadmin) {
+    const { data: callerMems, error: membershipScopeError } = await adminClient
+      .from('institution_memberships')
+      .select('institution_id, role, status')
+      .eq('user_id', authData.user.id)
+
+    const activeDirInsts = ((callerMems ?? []) as Array<Record<string, unknown>>)
+      .filter((m) => m.role === 'admin' && m.status === 'active')
+      .map((m) => String(m.institution_id))
+
+    if (membershipScopeError || activeDirInsts.length === 0) return json({ error: "No hay un ámbito institucional activo autorizado." }, 403)
+
+    if (activeDirInsts.length > 0) {
+      if (requestedInstId && !activeDirInsts.includes(requestedInstId)) {
+        return json({ error: 'No tienes permisos para gestionar accesos de una institución ajena.' }, 403)
+      }
+      const { data: targetMems } = await adminClient
+        .from('institution_memberships')
+        .select('institution_id')
+        .or(`user_id.eq.${targetUser.id},email.eq.${email}`)
+        .in('institution_id', activeDirInsts)
+
+      if (!targetMems || targetMems.length === 0) {
+        return json({ error: 'El docente no pertenece a tu institución.' }, 403)
+      }
+    }
+  }
 
   const recoveryClient = createClient(supabaseUrl, publishableKey)
   const { error: recoveryError } = await recoveryClient.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined)
   if (recoveryError) return json({ error: recoveryError.message }, 400)
 
   // Registrar evento administrativo en el Libro Digital de Auditoría
-  await adminClient.from('audit_events').insert({
+  // RC-FIX-01 (LAB-RC-001): PostgrestBuilder no expone .catch(); se inspecciona el error devuelto.
+  const { error: auditError } = await adminClient.from('audit_events').insert({
     actor_id: authData.user.id,
     event_type: 'teacher_access_recovery_sent',
     entity_type: 'user',
@@ -89,7 +129,8 @@ Deno.serve(async (request) => {
       teacherName: targetProfile?.display_name ?? 'Docente',
       timestamp: new Date().toISOString(),
     },
-  }).catch(() => {})
+  })
+  if (auditError) console.warn('audit_events insert failed', auditError.message)
 
   return json({ ok: true, email })
 })

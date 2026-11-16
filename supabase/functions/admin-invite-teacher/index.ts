@@ -56,13 +56,14 @@ Deno.serve(async (request) => {
 
   const { data: callerProfile, error: profileError } = await callerClient
     .from('profiles')
-    .select('role')
+    .select('role, roles')
     .eq('id', authData.user.id)
     .maybeSingle()
   if (profileError) return json({ error: profileError.message }, 500)
-  if (callerProfile?.role !== 'admin') return json({ error: 'Solo un administrador puede invitar usuarios.' }, 403)
+  const isCallerAdmin = callerProfile?.role === 'admin' || callerProfile?.role === 'superadmin' || (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('admin') || callerProfile.roles.includes('superadmin')))
+  if (!isCallerAdmin) return json({ error: 'Solo un administrador puede invitar usuarios.' }, 403)
 
-  let body: { email?: unknown; displayName?: unknown; redirectTo?: unknown }
+  let body: { email?: unknown; displayName?: unknown; redirectTo?: unknown; institutionId?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -72,11 +73,61 @@ Deno.serve(async (request) => {
   const email = String(body.email ?? '').trim().toLowerCase()
   const displayName = String(body.displayName ?? '').trim()
   const redirectTo = validateRedirectTo(body.redirectTo)
+  const requestedInstId = typeof body.institutionId === 'string' && body.institutionId.trim() ? body.institutionId.trim() : null
+
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) return json({ error: 'Escribe un correo electrónico válido.' }, 400)
   if (displayName.length < 2) return json({ error: 'Escribe el nombre visible del docente.' }, 400)
   if (redirectTo === null) return json({ error: 'La dirección de acceso no está permitida. Configura APP_URL o usa la URL local de EvaluEdu.' }, 400)
 
   const adminClient = createClient(supabaseUrl, serviceRoleKey)
+
+  // Verificar alcance institucional del actor
+  const isExplicitSuperadmin =
+    callerProfile?.role === 'superadmin' ||
+    callerProfile?.role === 'platform_admin' ||
+    (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('superadmin') || callerProfile.roles.includes('platform_admin')))
+
+  let targetInstitutionId = requestedInstId
+  if (!isExplicitSuperadmin) {
+    const { data: callerMems, error: membershipScopeError } = await adminClient
+      .from('institution_memberships')
+      .select('institution_id, role, status')
+      .eq('user_id', authData.user.id)
+
+    const activeDirInsts = ((callerMems ?? []) as Array<Record<string, unknown>>)
+      .filter((m) => m.role === 'admin' && m.status === 'active')
+      .map((m) => String(m.institution_id))
+
+    if (membershipScopeError || activeDirInsts.length === 0) return json({ error: "No hay un ámbito institucional activo autorizado." }, 403)
+
+    if (activeDirInsts.length > 0) {
+      if (targetInstitutionId && !activeDirInsts.includes(targetInstitutionId)) {
+        return json({ error: 'No tienes permisos para invitar docentes en una institución ajena.' }, 403)
+      }
+      if (!targetInstitutionId) {
+        targetInstitutionId = activeDirInsts[0]
+      }
+    }
+  }
+
+  // Si aplica ámbito institucional, verificar/reservar cupo antes de emitir invitación Auth
+  if (targetInstitutionId) {
+    const { data: quotaRes, error: quotaErr } = await callerClient.rpc('assign_institution_license', {
+      p_institution_id: targetInstitutionId,
+      p_email: email,
+      p_display_name: displayName,
+      p_role: 'teacher',
+      p_user_id: null,
+    })
+    if (quotaErr) {
+      return json({ error: quotaErr.message }, 403)
+    }
+    const qObj = quotaRes as Record<string, unknown> | null
+    if (qObj && qObj.ok === false) {
+      return json({ error: String(qObj.message ?? 'No hay cupos disponibles en la institución.'), code: qObj.error }, 409)
+    }
+  }
+
   const { data: invitation, error: invitationError } = await adminClient.auth.admin.inviteUserByEmail(email, {
     ...(redirectTo ? { redirectTo } : {}),
     data: { display_name: displayName },
@@ -109,7 +160,8 @@ Deno.serve(async (request) => {
   }
 
   // Registrar evento administrativo en el Libro Digital de Auditoría
-  await adminClient.from('audit_events').insert({
+  // RC-FIX-01 (LAB-RC-001): PostgrestBuilder no expone .catch(); se inspecciona el error devuelto.
+  const { error: auditError } = await adminClient.from('audit_events').insert({
     actor_id: authData.user.id,
     event_type: 'teacher_invited',
     entity_type: 'user',
@@ -118,9 +170,11 @@ Deno.serve(async (request) => {
       action: 'teacher_invitation_sent',
       email,
       displayName,
+      institution_id: targetInstitutionId,
       timestamp: new Date().toISOString(),
     },
-  }).catch(() => {})
+  })
+  if (auditError) console.warn('audit_events insert failed', auditError.message)
 
-  return json({ ok: true, userId: invitation.user.id, email, profileCreated: true }, 201)
+  return json({ ok: true, userId: invitation.user.id, email, institutionId: targetInstitutionId, status: 'reserved', profileCreated: true }, 201)
 })

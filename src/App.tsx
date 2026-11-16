@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
@@ -8,10 +8,56 @@ import {
   isResponseComplete,
 } from './lib/activityEngine'
 import type { Activity, ActivityDetails, ActivityResponse, ActivityType, ChoiceOption, FillBlankSlot, SpotErrorSegment, MarkWordsToken, GridCheckRow, GridCheckColumn, VennZone, VennItem, MatchingPair, ScenarioOption, ScenarioStage, SortingItem } from './lib/activityEngine'
+import {
+  assignSortingCategory,
+  buildCloudSubmitPayload,
+  buildMarkWordsInteractiveSegments,
+  clearFillBlanksSlot,
+  cloudActivityRowToStudentActivity,
+  getFillBlanksBankChips,
+  getMultiSelectOptionId,
+  getSimpleChoiceDisplayOptions,
+  isScenarioOptionSelected,
+  moveOrderingStepInList,
+  omitQuestionFromResponses,
+  resolveSelectedScenarioOption,
+  selectFillBlanksWord,
+  selectMatchingRight,
+  selectScenarioOption,
+  selectSimpleChoiceResponse,
+  selectSpotErrorSegment,
+  toggleGridCheckCell,
+  toggleMarkWordToken,
+  toggleMultiSelectOption,
+  toggleVennItemZone,
+} from './lib/studentPlayContract'
 import { canAccessPanel, createTeacherProfile, getProfile } from './lib/auth'
 import type { Profile } from './lib/auth'
 import { isSupabaseConfigured, supabase } from './lib/supabase'
-import { enqueueSyncItem, markSyncItemFailed, readSyncQueue, removeSyncItem, syncQueueChangedEvent, type SyncKind, type SyncQueueItem } from './lib/sync'
+import {
+  enqueueSyncItemDurable,
+  extractEntityKey,
+  isSyncItemReadyForRetry,
+  isTeacherSyncKind,
+  markSyncItemFailedDurable,
+  readOwnedTeacherSyncQueue,
+  readStudentSyncQueue,
+  readSyncQueue,
+  removeAttemptSyncItems,
+  removeSyncItemDurable,
+  removeSyncItemsForEntityIfNotNewer,
+  syncQueueChangedEvent,
+  updateSyncItemPayload,
+  type EnqueueSyncOptions,
+  type SyncKind,
+  type SyncQueueItem,
+} from './lib/sync'
+import {
+  classifyGuestJoinOrStatusFailure,
+  classifyGuestSubmitFailure,
+  parseGuestFunctionResponse,
+  resolveStudentReceiptEntries,
+} from './lib/studentSubmission'
 import { detectContentCompatibility, OFFICIAL_IMPORT_PROMPT, type ContentImportDocument, type ContentImportDocumentV1, type ContentImportResultV2, type ContentImportResultV1, type ActivityNeedingRepair, parseContentImport } from './lib/contentImport'
 import { TRUE_FALSE_LIMITS, validateTrueFalseDefinition } from './lib/activities/trueFalse'
 import { SINGLE_CHOICE_LIMITS, validateSingleChoiceDefinition } from './lib/activities/singleChoice'
@@ -59,10 +105,35 @@ type EvaluationTemplate = {
 type RoomStatus = 'draft' | 'ready' | 'waiting' | 'active' | 'finished' | 'archived'
 type RoomSettings = { name: string; instructions: string; activityIds: string[]; questionCount: number; limit: number; time: number | null; scorePerQuestion: number; shuffleQuestions: boolean; allowBack: boolean }
 type Room = RoomSettings & { id: string; code: string; activities: string[]; status: RoomStatus; createdAt: string; startedAt?: string; finishedAt?: string; archivedAt?: string }
-type AttemptAnswer = { index: number; activityId: string; activityTitle: string; activityType: ActivityType; response: string; status: 'answered' | 'omitted'; correct: boolean | null; score: number; timeSeconds: number; hint?: string; explanation?: string }
+type AttemptAnswer = { index: number; activityId: string; occurrenceId?: string; activityTitle: string; activityType: ActivityType; response: string; status: 'answered' | 'omitted'; correct: boolean | null; score: number; timeSeconds: number; hint?: string; explanation?: string }
 type AttemptEvent = { type: 'joined' | 'answer_submitted' | 'omitted' | 'navigated_back' | 'finished' | 'timeout'; at: string; detail?: string }
 type StudentAttempt = { id: string; roomId: string; roomName: string; roomCode: string; studentName: string; startedAt: string; finishedAt: string; status: 'completed' | 'timeout'; totalQuestions: number; answeredCount: number; omittedCount: number; correctCount: number; score: number; maxScore: number; answers: AttemptAnswer[]; events: AttemptEvent[] }
-type StudentSessionSnapshot = { studentName: string; roomCode: string; room: Room; participantId: string; guestToken: string; questionIds: string[]; responses: Record<number, ActivityResponse>; answerTimes: Record<number, number>; startedAt: string; events: AttemptEvent[]; finished: boolean; playIndex: number; submitted: boolean }
+export type StudentSubmissionStatus = 'working' | 'submitting' | 'confirmed' | 'pending_sync' | 'rejected'
+
+type StudentSessionSnapshot = {
+  studentName: string
+  roomCode: string
+  room: Room
+  participantId: string
+  guestToken: string
+  questionIds: string[]
+  occurrenceIds?: string[]
+  responses: Record<number, ActivityResponse>
+  answerTimes: Record<number, number>
+  startedAt: string
+  events: AttemptEvent[]
+  finished: boolean
+  playIndex: number
+  submitted: boolean
+  submissionStatus?: StudentSubmissionStatus
+  logicalAttemptId?: string
+  finishedAt?: string
+  finishReason?: 'completed' | 'timeout'
+  attemptRecord?: StudentAttempt | null
+  serverAttemptId?: string | null
+  submissionError?: string | null
+  durableBackupOk?: boolean
+}
 type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> }
 
 const studentSessionStorageKey = 'edueval-student-session'
@@ -138,6 +209,7 @@ type CloudActivityRow = {
   feedback: string
   details: unknown
   status: Activity['status']
+  updated_at?: string
 }
 
 type CloudRoomRow = {
@@ -192,6 +264,17 @@ function isCloudId(value: string | undefined): value is string {
   return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))
 }
 
+export function sanitizeCsvCell(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+  const str = value == null ? '' : String(value)
+  if (/^[=+\-@\t\r\uFF1D\uFF0B\uFF0D\uFF20]/.test(str) || /^[=+\-@\uFF1D\uFF0B\uFF0D\uFF20]/.test(str.trimStart())) {
+    return `'${str}`
+  }
+  return str
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
@@ -227,27 +310,34 @@ function cloudTemplateToLocal(row: CloudTemplateRow): EvaluationTemplate {
 }
 
 function cloudActivityToLocal(row: CloudActivityRow): Activity {
-  return {
-    id: row.id,
-    templateId: row.template_id ?? undefined,
-    title: row.title,
-    type: row.type,
-    topic: row.topic,
-    difficulty: row.difficulty,
-    prompt: row.prompt,
-    options: stringArray(row.options),
-    answer: stringOrArray(row.answer),
-    feedback: row.feedback,
-    details: isRecord(row.details) ? row.details as ActivityDetails : undefined,
-    status: row.status,
-  }
+  return cloudActivityRowToStudentActivity(row as unknown as Record<string, unknown>)
 }
 
-function mergeCloudItems<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+function mergeCloudItems<T extends { id: string; updatedAt?: string }>(
+  current: T[],
+  incoming: T[],
+  options?: { pendingIds?: ReadonlySet<string> }
+): T[] {
   const currentMap = new Map(current.map((item) => [item.id, item]))
+  const pendingIds = options?.pendingIds
   const merged = incoming.map((inc) => {
     const local = currentMap.get(inc.id)
-    if (local && typeof local === 'object' && 'status' in local && typeof inc === 'object' && 'status' in inc) {
+    if (!local) return inc
+
+    if (pendingIds?.has(inc.id)) {
+      return local
+    }
+
+    const localMs = typeof local.updatedAt === 'string' ? Date.parse(local.updatedAt) : Number.NaN
+    const incMs = typeof inc.updatedAt === 'string' ? Date.parse(inc.updatedAt) : Number.NaN
+    if (Number.isFinite(localMs) && Number.isFinite(incMs) && localMs > incMs) {
+      return local
+    }
+    if (Number.isFinite(localMs) && !Number.isFinite(incMs)) {
+      return local
+    }
+
+    if (typeof local === 'object' && 'status' in local && typeof inc === 'object' && 'status' in inc) {
       const localStatus = (local as { status: unknown }).status
       const incStatus = (inc as { status: unknown }).status
       // Si el docente ya aprobó la actividad en este dispositivo y la respuesta remota aún dice 'pending',
@@ -338,6 +428,97 @@ async function functionErrorMessage(error: unknown, data: unknown, fallback: str
   return fallback
 }
 
+function buildStudentAttemptRecord(params: {
+  attemptId: string
+  room: Room
+  studentName: string
+  questionIds: string[]
+  occurrenceIds?: string[]
+  activities: Activity[]
+  responses: Record<number, ActivityResponse>
+  answerTimes: Record<number, number>
+  startedAt: string
+  finishedAt: string
+  status: 'completed' | 'timeout'
+  events: AttemptEvent[]
+}): StudentAttempt {
+  const activityIds = params.questionIds.length ? params.questionIds : params.room.activities
+  const answerRows: AttemptAnswer[] = activityIds.map((activityId, index) => {
+    const activity = params.activities.find((item) => item.id === activityId)
+    const response = params.responses[index]
+    const evaluated = activity
+      ? evaluateActivityResponse(activity, response, params.room.scorePerQuestion)
+      : { response: '', status: 'omitted' as const, correct: null, score: 0 }
+    const occurrenceId = params.occurrenceIds?.[index] || undefined
+    const activityMeta = activity?.type === 'trueFalse'
+      ? { hint: evaluated.status === 'answered' ? (activity.details?.trueFalse?.hint ?? activity.feedback) : '', explanation: activity.details?.trueFalse?.explanation ?? '' }
+      : activity?.type === 'singleChoice'
+        ? { hint: evaluated.status === 'answered' ? (activity.details?.singleChoice?.hint ?? activity.feedback) : '', explanation: activity.details?.singleChoice?.explanation ?? '' }
+        : activity?.type === 'matching'
+          ? { hint: evaluated.status === 'answered' ? (activity.details?.matching?.hint ?? activity.feedback) : '', explanation: activity.details?.matching?.explanation ?? '' }
+          : activity?.type === 'sorting'
+            ? { hint: evaluated.status === 'answered' ? (activity.details?.sorting?.hint ?? activity.feedback) : '', explanation: activity.details?.sorting?.explanation ?? '' }
+            : activity?.type === 'ordering'
+              ? { hint: evaluated.status === 'answered' ? (activity.details?.ordering?.hint ?? activity.feedback) : '', explanation: activity.details?.ordering?.explanation ?? '' }
+              : activity?.type === 'scenario'
+                ? { hint: evaluated.status === 'answered' ? (activity.details?.scenario?.hint ?? activity.feedback) : '', explanation: activity.details?.scenario?.explanation ?? '' }
+                : {}
+    return {
+      index,
+      activityId,
+      occurrenceId,
+      activityTitle: activity?.title ?? 'Actividad eliminada',
+      activityType: activity?.type ?? 'singleChoice',
+      ...evaluated,
+      ...activityMeta,
+      timeSeconds: params.answerTimes[index] ?? 0,
+    }
+  })
+
+  return {
+    id: params.attemptId,
+    roomId: params.room.id,
+    roomName: params.room.name,
+    roomCode: params.room.code,
+    studentName: params.studentName.trim(),
+    startedAt: params.startedAt || params.finishedAt,
+    finishedAt: params.finishedAt,
+    status: params.status,
+    totalQuestions: answerRows.length,
+    answeredCount: answerRows.filter((answer) => answer.status === 'answered').length,
+    omittedCount: answerRows.filter((answer) => answer.status === 'omitted').length,
+    correctCount: answerRows.filter((answer) => answer.correct === true).length,
+    score: answerRows.reduce((total, answer) => total + answer.score, 0),
+    maxScore: answerRows.length * params.room.scorePerQuestion,
+    answers: answerRows,
+    events: params.events,
+  }
+}
+
+function removeStudentAttemptGuardKey(roomId: string, name: string) {
+  try {
+    const key = studentAttemptKey(roomId, name)
+    const storedKeys = readStorage<string[]>('edueval-attempts', [])
+    localStorage.setItem('edueval-attempts', JSON.stringify(storedKeys.filter((k) => k !== key)))
+  } catch {
+    // Ignorar error de almacenamiento al limpiar clave de bloqueo
+  }
+}
+
+function buildLocalActivitiesSnapshot(
+  activityIds: readonly string[],
+  activitiesList: readonly Activity[],
+  existingSnapshot?: Record<string, Activity>
+): Record<string, Activity> {
+  const snapshot: Record<string, Activity> = {}
+  for (const id of activityIds) {
+    if (isCloudId(id) || snapshot[id]) continue
+    const found = activitiesList.find((item) => item.id === id) ?? existingSnapshot?.[id]
+    if (found) snapshot[id] = found
+  }
+  return snapshot
+}
+
 function roleFromUrl(): Role | null {
   if (typeof window === 'undefined') return null
   const requested = new URLSearchParams(window.location.search).get('panel')
@@ -410,12 +591,21 @@ function App() {
   const [studentParticipantId, setStudentParticipantId] = useState<string | null>(() => readSessionStorage('edueval-student-participant-id'))
   const [studentGuestToken, setStudentGuestToken] = useState<string | null>(() => readSessionStorage('edueval-student-guest-token'))
   const [studentQuestionIds, setStudentQuestionIds] = useState<string[]>([])
+  const [studentOccurrenceIds, setStudentOccurrenceIds] = useState<string[]>([])
   const [studentResponses, setStudentResponses] = useState<Record<number, ActivityResponse>>({})
   const [studentAnswerTimes, setStudentAnswerTimes] = useState<Record<number, number>>({})
   const [studentStartedAt, setStudentStartedAt] = useState('')
   const [studentQuestionStartedAt, setStudentQuestionStartedAt] = useState(Date.now())
   const [studentEvents, setStudentEvents] = useState<AttemptEvent[]>([])
   const [studentFinished, setStudentFinished] = useState(false)
+  const [studentSubmissionStatus, setStudentSubmissionStatus] = useState<StudentSubmissionStatus>('working')
+  const [studentSubmissionError, setStudentSubmissionError] = useState<string | null>(null)
+  const [studentDurableBackupOk, setStudentDurableBackupOk] = useState(true)
+  const [studentBackupError, setStudentBackupError] = useState<string | null>(null)
+  const [studentLogicalAttemptId, setStudentLogicalAttemptId] = useState('')
+  const [studentFinishedAt, setStudentFinishedAt] = useState<string | null>(null)
+  const [studentFinishReason, setStudentFinishReason] = useState<'completed' | 'timeout' | null>(null)
+  const [studentServerAttemptId, setStudentServerAttemptId] = useState<string | null>(null)
   const [playIndex, setPlayIndex] = useState(0)
   const [submitted, setSubmitted] = useState(false)
   const [hasChosenRole, setHasChosenRole] = useState(() => Boolean(initialRole))
@@ -431,7 +621,20 @@ function App() {
   const [syncQueue, setSyncQueue] = useState<SyncQueueItem[]>(() => readSyncQueue())
   const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine)
   const [syncing, setSyncing] = useState(false)
+  const [studentSyncing, setStudentSyncing] = useState(false)
   const [lastSyncedAt, setLastSyncedAt] = useState(() => readStorage('edueval-last-sync', ''))
+  const syncingRef = useRef(false)
+  const studentSyncingRef = useRef(false)
+  const finishingAttemptRef = useRef(false)
+  const inFlightAttemptKeysRef = useRef<Set<string>>(new Set())
+  const activeStudentSessionRef = useRef<{ roomId: string; participantId: string | null } | null>(null)
+  const studentPollingBlockedUntilRef = useRef(0)
+  const studentPollingDisabledRef = useRef(false)
+  const studentAutoFlushBlockedUntilRef = useRef(0)
+  const lastMonotonicMsRef = useRef(0)
+  const entityRevisionRef = useRef<Map<string, number>>(new Map())
+  const inFlightUpdateAbortRef = useRef<Map<string, AbortController>>(new Map())
+  activeStudentSessionRef.current = studentRoom ? { roomId: studentRoom.id, participantId: studentParticipantId } : null
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
   const [showPasswordChange, setShowPasswordChange] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
@@ -448,14 +651,14 @@ function App() {
     'inst-san-simon': demoInstitutionTeachers,
   }))
 
-  useEffect(() => localStorage.setItem('edueval-institutions', JSON.stringify(institutions)), [institutions])
+  useEffect(() => { try { localStorage.setItem('edueval-institutions', JSON.stringify(institutions)) } catch {} }, [institutions])
   const activeInstitution = institutions.find((i) => i.id === activeInstitutionId) || institutions[0] || initialInstitutions[0]
   const currentTeachers = institutionTeachers[activeInstitution.id] || []
 
-  useEffect(() => localStorage.setItem('edueval-activities', JSON.stringify(activities)), [activities])
-  useEffect(() => localStorage.setItem('edueval-rooms', JSON.stringify(rooms)), [rooms])
-  useEffect(() => localStorage.setItem('edueval-templates', JSON.stringify(templates)), [templates])
-  useEffect(() => localStorage.setItem('edueval-attempt-records', JSON.stringify(attempts)), [attempts])
+  useEffect(() => { try { localStorage.setItem('edueval-activities', JSON.stringify(activities)) } catch {} }, [activities])
+  useEffect(() => { try { localStorage.setItem('edueval-rooms', JSON.stringify(rooms)) } catch {} }, [rooms])
+  useEffect(() => { try { localStorage.setItem('edueval-templates', JSON.stringify(templates)) } catch {} }, [templates])
+  useEffect(() => { try { localStorage.setItem('edueval-attempt-records', JSON.stringify(attempts)) } catch {} }, [attempts])
   useEffect(() => {
     const refreshQueue = () => setSyncQueue(readSyncQueue())
     const handleOnline = () => setIsOnline(true)
@@ -493,39 +696,450 @@ function App() {
     let mounted = true
     const restoreStudentSession = async () => {
       let restoredRoom = snapshot.room
-      if (supabase && isCloudId(restoredRoom.id)) {
-        const { data, error } = await supabase.functions.invoke('student-room-guest', { body: { action: 'status', code: snapshot.roomCode, participantId: snapshot.participantId, guestToken: snapshot.guestToken } })
-        if (error || !data?.room) {
-          sessionStorage.removeItem(studentSessionStorageKey)
-          return
+      let restoredQuestionIds = snapshot.questionIds ?? []
+      let restoredOccurrenceIds = snapshot.occurrenceIds ?? []
+      let restoredFinished = Boolean(snapshot.finished)
+      let restoredLogicalAttemptId = snapshot.logicalAttemptId || `attempt-${restoredRoom.id}-${snapshot.participantId}`
+      let restoredFinishedAt = snapshot.finishedAt ?? snapshot.attemptRecord?.finishedAt ?? null
+      let restoredFinishReason: 'completed' | 'timeout' | null =
+        snapshot.finishReason ?? (snapshot.attemptRecord?.status === 'timeout' ? 'timeout' : restoredFinished ? 'completed' : null)
+      let restoredServerAttemptId = snapshot.serverAttemptId?.trim() || null
+      let restoredSubmissionError = snapshot.submissionError ?? null
+      let restoredDurableBackupOk = snapshot.durableBackupOk ?? true
+      let restoredBackupError: string | null = restoredDurableBackupOk ? null : 'El respaldo automático en este dispositivo no estuvo disponible.'
+      let restoredAttempt: StudentAttempt | null = snapshot.attemptRecord ?? null
+      let resolvedStatus: StudentSubmissionStatus = 'working'
+
+      const buildDeterministicAttempt = (forcedId?: string) => {
+        if (restoredAttempt) {
+          return forcedId ? { ...restoredAttempt, id: forcedId } : restoredAttempt
         }
-        restoredRoom = normalizeRoom({ ...restoredRoom, status: data.room.status as RoomStatus, startedAt: data.room.started_at ?? restoredRoom.startedAt, finishedAt: data.room.finished_at ?? restoredRoom.finishedAt, archivedAt: data.room.archived_at ?? restoredRoom.archivedAt })
+        const effectiveFinishTime = restoredFinishedAt || snapshot.startedAt || new Date().toISOString()
+        const effectiveReason = restoredFinishReason ?? 'completed'
+        return buildStudentAttemptRecord({
+          attemptId: forcedId || restoredServerAttemptId || restoredLogicalAttemptId,
+          room: restoredRoom,
+          studentName: snapshot.studentName,
+          questionIds: restoredQuestionIds,
+          occurrenceIds: restoredOccurrenceIds,
+          activities,
+          responses: snapshot.responses ?? {},
+          answerTimes: snapshot.answerTimes ?? {},
+          startedAt: snapshot.startedAt,
+          finishedAt: effectiveFinishTime,
+          status: effectiveReason,
+          events: snapshot.events ?? [],
+        })
       }
+
+      const ensureAttemptQueued = (attemptRec: StudentAttempt) => {
+        const alreadyQueued = readStudentSyncQueue().some((item) => {
+          const p = isRecord(item.payload) ? item.payload : null
+          const rec = p && isRecord(p.record) ? p.record : null
+          const pPart = typeof p?.participantId === 'string' ? p.participantId : typeof rec?.participantId === 'string' ? rec.participantId : null
+          const pRoom = typeof p?.roomId === 'string' ? p.roomId : typeof rec?.roomId === 'string' ? rec.roomId : null
+          const pLogical = typeof p?.logicalAttemptId === 'string' ? p.logicalAttemptId : typeof rec?.id === 'string' ? rec.id : 'single'
+          return pPart === snapshot.participantId && (!pRoom || pRoom === restoredRoom.id) && pLogical === restoredLogicalAttemptId
+        })
+        if (!alreadyQueued) {
+          const enqRes = enqueueSyncItemDurable('attempt', {
+            record: attemptRec,
+            participantId: snapshot.participantId,
+            guestToken: snapshot.guestToken,
+            roomId: restoredRoom.id,
+            roomCode: restoredRoom.code,
+            logicalAttemptId: restoredLogicalAttemptId,
+            responses: snapshot.responses ?? {},
+            occurrenceIds: restoredOccurrenceIds,
+            enqueuedAt: attemptRec.finishedAt,
+          })
+          setSyncQueue(enqRes.queue)
+          if (!enqRes.ok) {
+            restoredDurableBackupOk = false
+            restoredBackupError = enqRes.message || 'No se pudo guardar el respaldo en el almacenamiento local.'
+          } else {
+            restoredDurableBackupOk = true
+            restoredBackupError = null
+          }
+        }
+      }
+
+      const reconcileWithSubmitAttempt = async (attemptRec: StudentAttempt): Promise<{
+        status: StudentSubmissionStatus
+        serverAttemptId: string | null
+        error: string | null
+      }> => {
+        if (!supabase || !isCloudId(restoredRoom.id)) {
+          return { status: 'confirmed', serverAttemptId: attemptRec.id, error: null }
+        }
+        const payload = buildCloudSubmitPayload({
+          roomId: restoredRoom.id,
+          roomCode: restoredRoom.code,
+          participantId: snapshot.participantId,
+          guestToken: snapshot.guestToken,
+          activitySequence: attemptRec.answers.map((answer) => ({ activityId: answer.activityId, occurrenceId: answer.occurrenceId })),
+          responses: snapshot.responses ?? {},
+          answerTimes: Object.fromEntries(attemptRec.answers.map((answer, index) => [index, answer.timeSeconds])),
+          startedAt: attemptRec.startedAt,
+          finishedAt: attemptRec.finishedAt,
+          status: attemptRec.status,
+          events: attemptRec.events,
+        })
+        let invokeData: unknown = null
+        let invokeError: unknown = null
+        try {
+          const res = await supabase.functions.invoke('student-room-guest', {
+            body: {
+              ...payload,
+              attempt: {
+                ...payload.attempt,
+                totalQuestions: attemptRec.totalQuestions,
+                answeredCount: attemptRec.answeredCount,
+                omittedCount: attemptRec.omittedCount,
+                correctCount: attemptRec.correctCount,
+                score: attemptRec.score,
+                maxScore: attemptRec.maxScore,
+                answers: attemptRec.answers,
+              },
+            },
+          })
+          invokeData = res.data
+          invokeError = res.error
+        } catch (err) {
+          invokeError = err
+        }
+        const rawId = isRecord(invokeData) && typeof invokeData.attemptId === 'string' ? invokeData.attemptId.trim() : ''
+        const hasValidId = rawId.length > 0
+        if (!invokeError && isRecord(invokeData) && invokeData.ok === true && hasValidId) {
+          setIsOnline(true)
+          const rm = removeAttemptSyncItems({
+            participantId: snapshot.participantId,
+            roomId: restoredRoom.id,
+            roomCode: restoredRoom.code,
+            logicalAttemptId: restoredLogicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          return { status: 'confirmed', serverAttemptId: rawId, error: null }
+        }
+        const parsedSubmit = await parseGuestFunctionResponse(
+          invokeError,
+          invokeData,
+          'No se pudo confirmar el identificador oficial de entrega en el servidor.'
+        )
+        const classified = classifyGuestSubmitFailure(parsedSubmit, hasValidId)
+        if (classified.outcome === 'rejected') {
+          const rm = removeAttemptSyncItems({
+            participantId: snapshot.participantId,
+            roomId: restoredRoom.id,
+            roomCode: restoredRoom.code,
+            logicalAttemptId: restoredLogicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          removeStudentAttemptGuardKey(restoredRoom.id, snapshot.studentName)
+          if (classified.httpStatus === 401 || classified.httpStatus === 403 || classified.httpStatus === 404) {
+            studentPollingDisabledRef.current = true
+          }
+          return { status: 'rejected', serverAttemptId: null, error: classified.error }
+        }
+        if (classified.retryAfterSeconds) {
+          studentAutoFlushBlockedUntilRef.current = Math.max(
+            studentAutoFlushBlockedUntilRef.current,
+            Date.now() + classified.retryAfterSeconds * 1000
+          )
+        }
+        ensureAttemptQueued(attemptRec)
+        return { status: 'pending_sync', serverAttemptId: null, error: classified.reason }
+      }
+
+      if (supabase && isCloudId(restoredRoom.id)) {
+        if (restoredFinished) {
+          restoredAttempt = buildDeterministicAttempt()
+          if (restoredServerAttemptId) {
+            resolvedStatus = 'confirmed'
+            restoredAttempt = { ...restoredAttempt, id: restoredServerAttemptId }
+          } else if (snapshot.submissionStatus === 'rejected') {
+            resolvedStatus = 'rejected'
+            studentPollingDisabledRef.current = true
+          } else {
+            let statusData: unknown = null
+            let statusError: unknown = null
+            try {
+              const res = await supabase.functions.invoke('student-room-guest', {
+                body: { action: 'status', code: snapshot.roomCode, participantId: snapshot.participantId, guestToken: snapshot.guestToken },
+              })
+              statusData = res.data
+              statusError = res.error
+            } catch (err) {
+              statusError = err
+            }
+            const parsedStatus = await parseGuestFunctionResponse(
+              statusError,
+              statusData,
+              'Sesión estudiantil recuperada del respaldo local.'
+            )
+            const statusOutcome = classifyGuestJoinOrStatusFailure(parsedStatus)
+            if (!statusError && isRecord(statusData) && statusData.room) {
+              setIsOnline(true)
+              restoredRoom = patchRoomFromRealtime(restoredRoom, statusData.room)
+              const statusAttemptId = typeof statusData.attemptId === 'string' ? statusData.attemptId.trim() : ''
+              if (statusAttemptId) {
+                restoredServerAttemptId = statusAttemptId
+                restoredAttempt = { ...restoredAttempt, id: statusAttemptId }
+                resolvedStatus = 'confirmed'
+                const rm = removeAttemptSyncItems({
+                  participantId: snapshot.participantId,
+                  roomId: restoredRoom.id,
+                  roomCode: restoredRoom.code,
+                  logicalAttemptId: restoredLogicalAttemptId,
+                })
+                setSyncQueue(rm.queue)
+              } else if (statusData.alreadyAttempted === true) {
+                const rec = await reconcileWithSubmitAttempt(restoredAttempt)
+                resolvedStatus = rec.status
+                restoredServerAttemptId = rec.serverAttemptId
+                restoredSubmissionError = rec.error
+                if (rec.serverAttemptId) restoredAttempt = { ...restoredAttempt, id: rec.serverAttemptId }
+              } else {
+                resolvedStatus = 'pending_sync'
+                ensureAttemptQueued(restoredAttempt)
+              }
+            } else if (statusOutcome === 'terminal_rejected') {
+              resolvedStatus = 'rejected'
+              restoredSubmissionError = parsedStatus.message
+              studentPollingDisabledRef.current = true
+              const rm = removeAttemptSyncItems({
+                participantId: snapshot.participantId,
+                roomId: restoredRoom.id,
+                roomCode: restoredRoom.code,
+                logicalAttemptId: restoredLogicalAttemptId,
+              })
+              setSyncQueue(rm.queue)
+              removeStudentAttemptGuardKey(restoredRoom.id, snapshot.studentName)
+            } else if (statusOutcome === 'already_attempted') {
+              const rec = await reconcileWithSubmitAttempt(restoredAttempt)
+              resolvedStatus = rec.status
+              restoredServerAttemptId = rec.serverAttemptId
+              restoredSubmissionError = rec.error
+              if (rec.serverAttemptId) restoredAttempt = { ...restoredAttempt, id: rec.serverAttemptId }
+            } else {
+              resolvedStatus = 'pending_sync'
+              ensureAttemptQueued(restoredAttempt)
+              setToast('Sesión estudiantil recuperada del respaldo local.')
+            }
+          }
+        } else {
+          let joinData: unknown = null
+          let joinError: unknown = null
+          try {
+            const res = await supabase.functions.invoke('student-room-guest', {
+              body: {
+                action: 'join',
+                code: snapshot.roomCode,
+                displayName: snapshot.studentName,
+                participantId: snapshot.participantId,
+                guestToken: snapshot.guestToken,
+              },
+            })
+            joinData = res.data
+            joinError = res.error
+          } catch (err) {
+            joinError = err
+          }
+
+          const joinOk = !joinError && isRecord(joinData) && joinData.ok === true && Boolean(joinData.room) && joinData.alreadyAttempted !== true
+          if (joinOk && isRecord(joinData)) {
+            if (Array.isArray(joinData.activities) && joinData.activities.length > 0) {
+              const cloudActivities = joinData.activities.map((item) => cloudActivityToLocal(item as CloudActivityRow))
+              setActivities((current) => mergeCloudItems(current, cloudActivities))
+              if (!restoredQuestionIds || restoredQuestionIds.length === 0) {
+                restoredQuestionIds = joinData.activities.map((item) => String((item as Record<string, unknown>).id))
+                restoredOccurrenceIds = Array.isArray(joinData.occurrenceIds)
+                  ? joinData.occurrenceIds.map((id: unknown) => String(id))
+                  : joinData.activities.map((item) => {
+                      const rec = item as Record<string, unknown>
+                      return String(rec.occurrenceId || rec.id)
+                    })
+              }
+            }
+            setIsOnline(true)
+            restoredRoom = patchRoomFromRealtime(restoredRoom, joinData.room)
+            resolvedStatus = 'working'
+          } else {
+            const parsedJoin = await parseGuestFunctionResponse(
+              joinError,
+              joinData,
+              'Sesión estudiantil recuperada del respaldo local.'
+            )
+            const joinOutcome = classifyGuestJoinOrStatusFailure(parsedJoin)
+            if (joinOutcome === 'already_attempted') {
+              restoredFinished = true
+              restoredFinishedAt = restoredFinishedAt || new Date().toISOString()
+              restoredFinishReason = restoredFinishReason ?? 'completed'
+              restoredAttempt = buildDeterministicAttempt()
+
+              let statusData: unknown = null
+              let statusError: unknown = null
+              try {
+                const res = await supabase.functions.invoke('student-room-guest', {
+                  body: { action: 'status', code: snapshot.roomCode, participantId: snapshot.participantId, guestToken: snapshot.guestToken },
+                })
+                statusData = res.data
+                statusError = res.error
+              } catch (err) {
+                statusError = err
+              }
+              const parsedStatus = await parseGuestFunctionResponse(
+                statusError,
+                statusData,
+                'No pudimos verificar el estado de tu entrega.'
+              )
+              const statusOutcome = classifyGuestJoinOrStatusFailure(parsedStatus)
+              if (statusOutcome === 'terminal_rejected') {
+                resolvedStatus = 'rejected'
+                restoredSubmissionError = parsedStatus.message
+                studentPollingDisabledRef.current = true
+                const rm = removeAttemptSyncItems({
+                  participantId: snapshot.participantId,
+                  roomId: restoredRoom.id,
+                  roomCode: restoredRoom.code,
+                  logicalAttemptId: restoredLogicalAttemptId,
+                })
+                setSyncQueue(rm.queue)
+                removeStudentAttemptGuardKey(restoredRoom.id, snapshot.studentName)
+              } else {
+                if (isRecord(statusData) && statusData.room) {
+                  setIsOnline(true)
+                  restoredRoom = patchRoomFromRealtime(restoredRoom, statusData.room)
+                }
+                const statusAttemptId = isRecord(statusData) && typeof statusData.attemptId === 'string' ? statusData.attemptId.trim() : ''
+                if (statusAttemptId) {
+                  restoredServerAttemptId = statusAttemptId
+                  restoredAttempt = { ...restoredAttempt, id: statusAttemptId }
+                  resolvedStatus = 'confirmed'
+                  setToast('Tu participación ya había sido confirmada en el servidor docente.')
+                } else {
+                  const rec = await reconcileWithSubmitAttempt(restoredAttempt)
+                  resolvedStatus = rec.status
+                  restoredServerAttemptId = rec.serverAttemptId
+                  restoredSubmissionError = rec.error
+                  if (rec.serverAttemptId) restoredAttempt = { ...restoredAttempt, id: rec.serverAttemptId }
+                  if (rec.status === 'confirmed') {
+                    setToast('Tu participación ya había sido confirmada en el servidor docente.')
+                  } else if (rec.status === 'rejected' && rec.error) {
+                    setToast(rec.error)
+                  }
+                }
+              }
+            } else if (joinOutcome === 'name_conflict' || joinOutcome === 'terminal_rejected') {
+              try { sessionStorage.removeItem(studentSessionStorageKey) } catch {}
+              setToast(
+                joinOutcome === 'name_conflict'
+                  ? (parsedJoin.message || 'Ese nombre ya está en uso en la sala. Ingresa nuevamente.')
+                  : (parsedJoin.message || 'Tu sesión estudiantil expiró o la sala ya no existe. Ingresa nuevamente.')
+              )
+              return
+            } else {
+              resolvedStatus = 'working'
+              setToast('Sesión estudiantil recuperada del respaldo local. La sincronización se reanudará con la conexión.')
+            }
+          }
+        }
+      } else {
+        if (restoredFinished) {
+          restoredAttempt = buildDeterministicAttempt()
+          resolvedStatus = snapshot.submissionStatus === 'rejected' ? 'rejected' : 'confirmed'
+        } else {
+          resolvedStatus = 'working'
+        }
+      }
+
       if (!mounted) return
+      activeStudentSessionRef.current = { roomId: restoredRoom.id, participantId: snapshot.participantId }
       setStudentName(snapshot.studentName)
       setRoomCode(snapshot.roomCode)
       setStudentParticipantId(snapshot.participantId)
       setStudentGuestToken(snapshot.guestToken)
       setStudentRoom(restoredRoom)
-      setStudentQuestionIds(snapshot.questionIds)
-      setStudentResponses(snapshot.responses)
-      setStudentAnswerTimes(snapshot.answerTimes)
+      setStudentQuestionIds(restoredQuestionIds)
+      setStudentOccurrenceIds(restoredOccurrenceIds)
+      setStudentResponses(snapshot.responses ?? {})
+      setStudentAnswerTimes(snapshot.answerTimes ?? {})
       setStudentStartedAt(snapshot.startedAt)
       setStudentQuestionStartedAt(Date.now())
-      setStudentEvents(snapshot.events)
-      setStudentFinished(snapshot.finished)
-      setPlayIndex(snapshot.playIndex)
-      setSubmitted(snapshot.submitted)
-      setView(snapshot.finished ? 'overview' : 'play')
+      setStudentEvents(snapshot.events ?? [])
+      setStudentFinished(restoredFinished)
+      setStudentLogicalAttemptId(restoredLogicalAttemptId)
+      setStudentFinishedAt(restoredFinishedAt)
+      setStudentFinishReason(restoredFinishReason)
+      setStudentServerAttemptId(restoredServerAttemptId)
+      setStudentSubmissionError(restoredSubmissionError)
+      setStudentDurableBackupOk(restoredDurableBackupOk)
+      setStudentBackupError(restoredBackupError)
+      setLastStudentAttempt(restoredAttempt)
+      setPlayIndex(snapshot.playIndex ?? 0)
+      setSubmitted(Boolean(snapshot.submitted) || resolvedStatus === 'confirmed')
+      setStudentSubmissionStatus(resolvedStatus)
+      setView(restoredFinished ? 'overview' : 'play')
     }
     void restoreStudentSession()
     return () => { mounted = false }
   }, [role])
   useEffect(() => {
     if (role !== 'student' || !studentRoom || !studentParticipantId || !studentGuestToken) return
-    const snapshot: StudentSessionSnapshot = { studentName, roomCode: studentRoom.code, room: studentRoom, participantId: studentParticipantId, guestToken: studentGuestToken, questionIds: studentQuestionIds, responses: studentResponses, answerTimes: studentAnswerTimes, startedAt: studentStartedAt, events: studentEvents, finished: studentFinished, playIndex, submitted }
-    sessionStorage.setItem(studentSessionStorageKey, JSON.stringify(snapshot))
-  }, [role, studentRoom, studentParticipantId, studentGuestToken, studentName, roomCode, studentQuestionIds, studentResponses, studentAnswerTimes, studentStartedAt, studentEvents, studentFinished, playIndex, submitted])
+    const snapshot: StudentSessionSnapshot = {
+      studentName,
+      roomCode: studentRoom.code,
+      room: studentRoom,
+      participantId: studentParticipantId,
+      guestToken: studentGuestToken,
+      questionIds: studentQuestionIds,
+      occurrenceIds: studentOccurrenceIds,
+      responses: studentResponses,
+      answerTimes: studentAnswerTimes,
+      startedAt: studentStartedAt,
+      events: studentEvents,
+      finished: studentFinished,
+      playIndex,
+      submitted,
+      submissionStatus: studentSubmissionStatus,
+      logicalAttemptId: studentLogicalAttemptId || undefined,
+      finishedAt: studentFinishedAt ?? undefined,
+      finishReason: studentFinishReason ?? undefined,
+      attemptRecord: lastStudentAttempt,
+      serverAttemptId: studentServerAttemptId,
+      submissionError: studentSubmissionError,
+      durableBackupOk: studentDurableBackupOk,
+    }
+    try {
+      sessionStorage.setItem(studentSessionStorageKey, JSON.stringify(snapshot))
+    } catch {
+      // Ignorar si sessionStorage no admite escritura
+    }
+  }, [
+    role,
+    studentRoom,
+    studentParticipantId,
+    studentGuestToken,
+    studentName,
+    roomCode,
+    studentQuestionIds,
+    studentOccurrenceIds,
+    studentResponses,
+    studentAnswerTimes,
+    studentStartedAt,
+    studentEvents,
+    studentFinished,
+    playIndex,
+    submitted,
+    studentSubmissionStatus,
+    studentLogicalAttemptId,
+    studentFinishedAt,
+    studentFinishReason,
+    lastStudentAttempt,
+    studentServerAttemptId,
+    studentSubmissionError,
+    studentDurableBackupOk,
+  ])
   useEffect(() => {
     if (!supabase) return
     let mounted = true
@@ -561,7 +1175,7 @@ function App() {
     const loadCloudContent = async () => {
       const [templateResult, activityResult, roomResult] = await Promise.all([
         client.from('evaluation_templates').select('id, title, subject, description, objective, competency, difficulty, content, status, updated_at').eq('owner_id', authProfile.id).order('updated_at', { ascending: false }),
-        client.from('activities').select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status').eq('owner_id', authProfile.id).order('updated_at', { ascending: false }),
+        client.from('activities').select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status, updated_at').eq('owner_id', authProfile.id).order('updated_at', { ascending: false }),
         client.from('rooms').select('id, owner_id, name, code, instructions, status, question_count, student_limit, time_minutes, score_per_question, shuffle_questions, allow_back, created_at, started_at, finished_at, archived_at').eq('owner_id', authProfile.id).order('created_at', { ascending: false }),
       ])
       if (!mounted) return
@@ -616,9 +1230,23 @@ function App() {
           }
         }
       }
-      setTemplates((current) => mergeCloudItems(current, cloudTemplates))
-      setActivities((current) => mergeCloudItems(current, cloudActivities))
-      setRooms((current) => mergeCloudItems(current, cloudRooms))
+      const ownedQueue = readOwnedTeacherSyncQueue(authProfile.id)
+      const pendingEntityIds = new Set<string>()
+      const pendingRoomCodes = new Set<string>()
+      for (const qItem of ownedQueue) {
+        const key = extractEntityKey(qItem.payload)
+        if (key) pendingEntityIds.add(key)
+        if (qItem.kind === 'room_transition' && isRecord(qItem.payload) && typeof qItem.payload.roomCode === 'string') {
+          pendingRoomCodes.add(qItem.payload.roomCode)
+        }
+      }
+      const pendingRoomIds = new Set<string>(pendingEntityIds)
+      for (const r of cloudRooms) {
+        if (pendingRoomCodes.has(r.code)) pendingRoomIds.add(r.id)
+      }
+      setTemplates((current) => mergeCloudItems(current, cloudTemplates, { pendingIds: pendingEntityIds }))
+      setActivities((current) => mergeCloudItems(current, cloudActivities, { pendingIds: pendingEntityIds }))
+      setRooms((current) => mergeCloudItems(current, cloudRooms, { pendingIds: pendingRoomIds }))
       markSynced()
     }
     void loadCloudContent()
@@ -630,6 +1258,71 @@ function App() {
       setAdminSnapshot(null)
       return
     }
+
+    try {
+      const [{ data: cloudInstRows, error: instError }, { data: membershipRows, error: memError }] = await Promise.all([
+        supabase.from('institutions').select('*'),
+        supabase.from('institution_memberships').select('*'),
+      ])
+
+      if (!instError && Array.isArray(cloudInstRows)) {
+        const teachersByInst: Record<string, AdminUser[]> = {}
+        if (!memError && Array.isArray(membershipRows)) {
+          for (const row of membershipRows as any[]) {
+            const instId = row.institution_id
+            if (!instId) continue
+            const mappedStatus =
+              row.status === 'disabled'
+                ? 'Bloqueado'
+                : row.status === 'reserved' || !row.user_id
+                  ? 'Reservado'
+                  : 'Activo'
+            const member: AdminUser = {
+              id: row.id,
+              displayName: row.display_name || row.email || 'Docente',
+              email: row.email || '',
+              role: row.role || 'teacher',
+              roles: [row.role || 'teacher'],
+              status: mappedStatus,
+              createdAt: row.created_at || new Date().toISOString(),
+              lastSignInAt: null,
+            }
+            if (!teachersByInst[instId]) teachersByInst[instId] = []
+            teachersByInst[instId].push(member)
+          }
+          setInstitutionTeachers(teachersByInst)
+        }
+
+        const mappedCloud: Institution[] = cloudInstRows.map((row: any) => {
+          const instTeachers = teachersByInst[row.id] || []
+          const activeCount = instTeachers.filter((t) => t.status !== 'Bloqueado').length
+          return {
+            id: row.id,
+            name: row.name,
+            code: row.code,
+            planName: row.plan_name || 'Licencia Institucional',
+            licenseLimit: row.license_limit || 20,
+            activeLicenses: activeCount,
+            contactName: row.contact_name || '',
+            contactEmail: row.contact_email || '',
+            status: (row.status === 'suspended' ? 'suspended' : 'active') as Institution['status'],
+            validUntil: row.valid_until ? row.valid_until.slice(0, 10) : new Date().toISOString().slice(0, 10),
+            createdAt: row.created_at ? row.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+            stats: {
+              totalEvaluations: 0,
+              activeTeachersPercent: 0,
+            },
+          }
+        })
+        setInstitutions(mappedCloud)
+        if (mappedCloud.length > 0 && !mappedCloud.some((inst) => inst.id === activeInstitutionId)) {
+          setActiveInstitutionId(mappedCloud[0].id)
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching cloud institutions:', err)
+    }
+
     const { data, error } = await supabase.functions.invoke('admin-platform-data', { body: {} })
     if (error || !data?.ok) {
       if (showError) setToast('No pudimos cargar los datos globales de administración; se conserva el respaldo local.')
@@ -645,7 +1338,8 @@ function App() {
   const published = activities.filter((item) => item.status === 'published')
   const pending = activities.filter((item) => item.status === 'pending')
   const backendReady = isSupabaseConfigured
-  const syncLabel = !backendReady ? 'Respaldo local' : !isOnline ? 'Sin conexión · respaldo local' : syncing ? 'Sincronizando…' : syncQueue.length ? `${syncQueue.length} pendiente${syncQueue.length === 1 ? '' : 's'}` : lastSyncedAt ? 'Sincronizado' : 'Supabase conectado'
+  const teacherPendingCount = authProfile?.id ? readOwnedTeacherSyncQueue(authProfile.id).length : 0
+  const syncLabel = !backendReady ? 'Respaldo local' : !isOnline ? 'Sin conexión · respaldo local' : syncing ? 'Sincronizando…' : teacherPendingCount ? `${teacherPendingCount} pendiente${teacherPendingCount === 1 ? '' : 's'}` : lastSyncedAt ? 'Sincronizado' : 'Supabase conectado'
   const panelView = role === 'student' ? view : allowedPanelViews[role].includes(view) ? view : 'overview'
   const displayName = authProfile?.display_name?.trim() || authSession?.user.email?.split('@')[0] || 'Docente'
   const firstName = displayName.split(/\s+/)[0]
@@ -669,9 +1363,10 @@ function App() {
   const show = (next: View) => { setView(next); setSelectedActivity(null); setSubmitted(false); setMobileNavOpen(false) }
   const notify = (message: string) => setToast(message)
 
-  const addInstitution = (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => {
+  const addInstitution = async (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => {
+    const instId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `inst-${Date.now()}`
     const newInst: Institution = {
-      id: `inst-${Date.now()}`,
+      id: instId,
       name: data.name.trim(),
       code: data.code.trim().toUpperCase(),
       planName: data.planName.trim(),
@@ -687,11 +1382,38 @@ function App() {
         activeTeachersPercent: 0,
       },
     }
+
+    if (supabase) {
+      try {
+        const { data: inserted, error } = await supabase.from('institutions').insert({
+          ...(isCloudId(newInst.id) ? { id: newInst.id } : {}),
+          name: newInst.name,
+          code: newInst.code,
+          plan_name: newInst.planName,
+          license_limit: newInst.licenseLimit,
+          contact_name: newInst.contactName,
+          contact_email: newInst.contactEmail,
+          status: 'active',
+          valid_until: newInst.validUntil ? new Date(newInst.validUntil).toISOString() : new Date().toISOString(),
+        }).select().single()
+        if (error || !inserted?.id) {
+          notify(`Error al registrar institución: ${error?.message || 'No se recibió confirmación del servidor.'}`)
+          return
+        }
+        const confirmedInst: Institution = { ...newInst, id: inserted.id }
+        setInstitutions((prev) => [confirmedInst, ...prev])
+        notify(`Colegio ${confirmedInst.name} registrado con éxito. Paquete de ${confirmedInst.licenseLimit} licencias activado.`)
+      } catch (err) {
+        notify(`Error de red al registrar institución: ${err instanceof Error ? err.message : 'Error desconocido'}`)
+      }
+      return
+    }
+
     setInstitutions((prev) => [newInst, ...prev])
     notify(`Colegio ${newInst.name} registrado con éxito. Paquete de ${newInst.licenseLimit} licencias activado.`)
   }
 
-  const handleAddTeacher = (teacherData: { displayName: string; email: string; password?: string }) => {
+  const handleAddTeacher = async (teacherData: { displayName: string; email: string; password?: string }) => {
     const instId = activeInstitution.id
     const currentList = institutionTeachers[instId] || []
     const activeCount = currentList.filter((t) => t.status !== 'Bloqueado').length
@@ -701,27 +1423,80 @@ function App() {
       return
     }
 
+    const teacherUuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : `usr-${Date.now()}`
+    const normalizedEmail = teacherData.email.trim().toLowerCase()
+    const normalizedName = teacherData.displayName.trim()
+
+    if (supabase) {
+      try {
+        let cloudInstId = isCloudId(instId) ? instId : ''
+        if (!cloudInstId) {
+          const { data: instRow } = await supabase.from('institutions').select('id').eq('code', activeInstitution.code).maybeSingle()
+          if (instRow?.id && isCloudId(instRow.id)) {
+            cloudInstId = instRow.id
+          }
+        }
+        if (!cloudInstId) {
+          notify('Error: la institución aún no está sincronizada en el servidor.')
+          return
+        }
+        const { data, error } = await supabase.rpc('assign_institution_license', {
+          p_institution_id: cloudInstId,
+          p_email: normalizedEmail,
+          p_display_name: normalizedName,
+          p_role: 'teacher',
+        })
+        if (error || data?.ok === false) {
+          notify(`No se pudo asignar la licencia: ${data?.error || error?.message || 'Error del servidor.'}`)
+          return
+        }
+        const membership = data?.membership
+        const isReserved = membership?.status === 'reserved' || !membership?.user_id
+        const confirmedTeacher: AdminUser = {
+          id: membership?.id || teacherUuid,
+          displayName: normalizedName,
+          email: normalizedEmail,
+          role: 'teacher',
+          roles: ['teacher'],
+          status: isReserved ? 'Reservado' : 'Activo',
+          createdAt: membership?.created_at || new Date().toISOString(),
+          lastSignInAt: null,
+        }
+        setInstitutionTeachers((prev) => ({
+          ...prev,
+          [instId]: [confirmedTeacher, ...(prev[instId] || [])],
+        }))
+        setInstitutions((prev) => prev.map((inst) => inst.id === instId ? { ...inst, activeLicenses: activeCount + 1 } : inst))
+        notify(
+          isReserved
+            ? `Licencia reservada para ${confirmedTeacher.displayName} (${confirmedTeacher.email}).`
+            : `Profesor(a) ${confirmedTeacher.displayName} dado de alta con licencia activa asignada.`
+        )
+      } catch (err) {
+        notify(`Error de red al asignar licencia: ${err instanceof Error ? err.message : 'Error desconocido'}`)
+      }
+      return
+    }
+
     const newTeacher: AdminUser = {
-      id: `usr-${Date.now()}`,
-      displayName: teacherData.displayName.trim(),
-      email: teacherData.email.trim().toLowerCase(),
+      id: teacherUuid,
+      displayName: normalizedName,
+      email: normalizedEmail,
       role: 'teacher',
       roles: ['teacher'],
       status: 'Activo',
       createdAt: new Date().toISOString(),
       lastSignInAt: null,
     }
-
     setInstitutionTeachers((prev) => ({
       ...prev,
       [instId]: [newTeacher, ...(prev[instId] || [])],
     }))
-
     setInstitutions((prev) => prev.map((inst) => inst.id === instId ? { ...inst, activeLicenses: activeCount + 1 } : inst))
     notify(`Profesor(a) ${newTeacher.displayName} dado de alta con licencia activa asignada.`)
   }
 
-  const handleToggleTeacherStatus = (user: AdminUser, action: 'enable' | 'disable') => {
+  const handleToggleTeacherStatus = async (user: AdminUser, action: 'enable' | 'disable') => {
     const instId = activeInstitution.id
     const currentList = institutionTeachers[instId] || []
     const activeCount = currentList.filter((t) => t.status !== 'Bloqueado').length
@@ -729,6 +1504,22 @@ function App() {
     if (action === 'enable' && activeCount >= activeInstitution.licenseLimit) {
       notify(`No hay cupos disponibles. El colegio tiene ocupadas ${activeCount} de sus ${activeInstitution.licenseLimit} licencias contratadas.`)
       return
+    }
+
+    if (supabase && isCloudId(user.id)) {
+      try {
+        const { data, error } = await supabase.rpc('toggle_institution_membership_status', {
+          p_membership_id: user.id,
+          p_action: action,
+        })
+        if (error || data?.ok === false) {
+          notify(`No se pudo actualizar el estado de la licencia: ${data?.error || error?.message || 'Error del servidor.'}`)
+          return
+        }
+      } catch (err) {
+        notify(`Error de red al actualizar licencia: ${err instanceof Error ? err.message : 'Error desconocido'}`)
+        return
+      }
     }
 
     const updatedStatus = action === 'enable' ? 'Activo' : 'Bloqueado'
@@ -748,9 +1539,62 @@ function App() {
       notify(`Licencia reactivada para ${user.displayName}. Acceso restaurado.`)
     }
   }
-  const queueSync = (kind: SyncKind, payload: unknown, message: string) => {
-    setSyncQueue(enqueueSyncItem(kind, payload))
-    notify(message)
+
+  const handleUpdateInstitutionQuota = async (institution: Institution, nextLimit: number) => {
+    if (!Number.isFinite(nextLimit) || nextLimit < 1) {
+      notify('El cupo de licencias debe ser un número entero mayor o igual a 1.')
+      return
+    }
+    if (supabase && isCloudId(institution.id)) {
+      try {
+        const { data, error } = await supabase.rpc('update_institution_quota', {
+          p_institution_id: institution.id,
+          p_new_limit: Math.floor(nextLimit),
+        })
+        if (error || data?.ok === false) {
+          notify(`No se pudo actualizar el cupo: ${data?.error || error?.message || 'Error del servidor.'}`)
+          return
+        }
+      } catch (err) {
+        notify(`Error de red al actualizar cupo: ${err instanceof Error ? err.message : 'Error desconocido'}`)
+        return
+      }
+    }
+    setInstitutions((prev) => prev.map((inst) => inst.id === institution.id ? { ...inst, licenseLimit: Math.floor(nextLimit) } : inst))
+    notify(`Cupo de ${institution.name} actualizado a ${Math.floor(nextLimit)} licencias.`)
+  }
+  const nextMonotonicTimestamp = (previous?: string): string => {
+    const nowMs = Date.now()
+    const prevMs = previous ? Date.parse(previous) : Number.NaN
+    const minRequiredMs = Math.max(
+      Number.isFinite(prevMs) ? prevMs + 1 : 0,
+      lastMonotonicMsRef.current + 1
+    )
+    const nextMs = Math.max(nowMs, minRequiredMs)
+    lastMonotonicMsRef.current = nextMs
+    return new Date(nextMs).toISOString()
+  }
+  const queueSync = (
+    kind: SyncKind,
+    payload: unknown,
+    message?: string,
+    ownerId?: string,
+    options?: EnqueueSyncOptions
+  ): boolean => {
+    const candidateOwner = isTeacherSyncKind(kind) ? (ownerId?.trim() || authProfile?.id?.trim() || undefined) : undefined
+    if (isTeacherSyncKind(kind) && !candidateOwner) return false
+    const normalizedPayload =
+      isTeacherSyncKind(kind) && isRecord(payload) && typeof payload.ownerId !== 'string'
+        ? { ...payload, ownerId: candidateOwner }
+        : payload
+    const res = enqueueSyncItemDurable(kind, normalizedPayload, candidateOwner, options)
+    setSyncQueue(res.queue)
+    if (res.ok) {
+      if (message) notify(message)
+      return true
+    }
+    notify('⚠️ No se pudo guardar el respaldo en el almacenamiento local (espacio agotado o acceso denegado). Los cambios solo siguen en memoria; no cierres esta pestaña.')
+    return false
   }
   const markSynced = () => {
     const stamp = new Date().toISOString()
@@ -816,12 +1660,24 @@ function App() {
     } catch {
       // La interfaz y el almacenamiento de este dispositivo se limpian aunque la red no responda.
     } finally {
+      activeStudentSessionRef.current = null
+      finishingAttemptRef.current = false
+      inFlightAttemptKeysRef.current.clear()
+      studentPollingBlockedUntilRef.current = 0
+      studentPollingDisabledRef.current = false
+      studentAutoFlushBlockedUntilRef.current = 0
       sessionStorage.removeItem(studentSessionStorageKey)
       sessionStorage.removeItem('edueval-student-participant-id')
       sessionStorage.removeItem('edueval-student-guest-token')
       setStudentRoom(null)
       setStudentParticipantId(null)
       setStudentGuestToken(null)
+      setLastStudentAttempt(null)
+      setStudentFinished(false)
+      setStudentSubmissionStatus('working')
+      setStudentSubmissionError(null)
+      setStudentDurableBackupOk(true)
+      setStudentBackupError(null)
       setHasChosenRole(false)
       setRole('teacher')
       setView('overview')
@@ -894,41 +1750,206 @@ function App() {
     await signOut('Recuperación cancelada.')
   }
 
-  const persistCloudActivity = async (activity: Activity, localId: string, queueOnFailure = true) => {
-    if (!supabase || !authProfile) return false
+  const persistCloudActivity = async (activity: Activity, localId: string, queueOnFailure = true): Promise<Activity | null> => {
+    if (!supabase || !authProfile) return null
+    const readLocalActivityMap = (): Record<string, string> => {
+      const stored = readStorage<Record<string, string>>('edueval-local-activity-map', {})
+      if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+        return stored
+      }
+      try {
+        const raw = localStorage.getItem('edueval-local-activity-map')
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed as Record<string, string>
+          }
+        }
+      } catch {}
+      return {}
+    }
+    const writeLocalActivityMap = (map: Record<string, string>): boolean => {
+      try {
+        localStorage.setItem('edueval-local-activity-map', JSON.stringify(map))
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    const activityColumns = 'id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status, updated_at'
     let data: unknown = null
     let error: { message: string } | null = null
-    if (!queueOnFailure) {
-      const existing = await supabase.from('activities').select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status').eq('owner_id', authProfile.id).eq('type', activity.type).eq('title', activity.title).limit(1).maybeSingle()
+
+    const localMap = readLocalActivityMap()
+    const mappedCloudId = localMap[localId]
+    let reservedId: string | undefined
+    let reservationDurable = true
+
+    if (!isCloudId(localId) && !mappedCloudId) {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        reservedId = crypto.randomUUID()
+        const written = writeLocalActivityMap({ ...localMap, [localId]: reservedId })
+        reservationDurable = written && readLocalActivityMap()[localId] === reservedId
+      } else {
+        reservationDurable = false
+      }
+    }
+
+    if (isCloudId(localId)) {
+      const existing = await supabase.from('activities').select(activityColumns).eq('id', localId).maybeSingle()
+      data = existing.data
+      error = existing.error
+    } else if (mappedCloudId) {
+      const existing = await supabase.from('activities').select(activityColumns).eq('id', mappedCloudId).eq('owner_id', authProfile.id).maybeSingle()
       data = existing.data
       error = existing.error
     }
+
     if (!data && !error) {
-      const inserted = await supabase.from('activities').insert({
-      owner_id: authProfile.id,
-      template_id: isCloudId(activity.templateId) ? activity.templateId : null,
-      type: activity.type,
-      title: activity.title,
-      topic: activity.topic,
-      difficulty: activity.difficulty,
-      prompt: activity.prompt,
-      options: activity.options,
-      answer: activity.answer,
-      feedback: activity.feedback,
-      details: activity.details ?? {},
-      status: activity.status,
-      }).select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status').single()
-      data = inserted.data
-      error = inserted.error
+      // Nunca se genera un ID nuevo si ya existe reserva/mapeo: el reintento reutiliza el mismo ID.
+      const candidateId = isCloudId(localId) ? localId : (mappedCloudId ?? reservedId)
+      const insertPayload: Record<string, unknown> = {
+        owner_id: authProfile.id,
+        template_id: isCloudId(activity.templateId) ? activity.templateId : null,
+        type: activity.type,
+        title: activity.title,
+        topic: activity.topic,
+        difficulty: activity.difficulty,
+        prompt: activity.prompt,
+        options: activity.options,
+        answer: activity.answer,
+        feedback: activity.feedback,
+        details: { ...(activity.details ?? {}), client_local_id: localId },
+        status: activity.status,
+      }
+      if (candidateId) {
+        insertPayload.id = candidateId
+      }
+      try {
+        const inserted = await supabase.from('activities').insert(insertPayload).select(activityColumns).single()
+        data = inserted.data
+        error = inserted.error
+      } catch (insertError) {
+        data = null
+        error = { message: insertError instanceof Error ? insertError.message : String(insertError) }
+      }
+      if ((error || !data) && !reservationDurable) {
+        notify('⚠️ No se pudo reservar la identidad de la actividad en el almacenamiento local; si el servidor la guardó, un reintento podría no reconocerla. Revisa tus actividades en la nube antes de reintentar.')
+      }
     }
+
     if (error || !data) {
-      if (queueOnFailure) queueSync('activity', { activity, localId }, 'Actividad guardada en el respaldo local; quedó pendiente de sincronización.')
-      return false
+      if (queueOnFailure) queueSync('activity', { activity, localId, ownerId: authProfile.id }, 'Actividad guardada en el respaldo local; quedó pendiente de sincronización.', authProfile.id)
+      return null
     }
     const cloudActivity = cloudActivityToLocal(data as CloudActivityRow)
+    writeLocalActivityMap({ ...readLocalActivityMap(), [localId]: cloudActivity.id })
+
     setActivities((current) => current.map((item) => item.id === localId ? cloudActivity : item))
+    try {
+      const storedActivities = readStorage<Activity[]>('edueval-activities', [])
+      localStorage.setItem('edueval-activities', JSON.stringify(storedActivities.map((item) => item.id === localId ? cloudActivity : item)))
+    } catch {
+      // Ignorar errores de cuota en respaldo secundario
+    }
     markSynced()
-    return true
+    return cloudActivity
+  }
+
+  const updateActivity = async (updated: Activity) => {
+    const revKey = `activity:${updated.id}`
+    const clientRevision = (entityRevisionRef.current.get(revKey) ?? 0) + 1
+    entityRevisionRef.current.set(revKey, clientRevision)
+    const prevAbort = inFlightUpdateAbortRef.current.get(revKey)
+    if (prevAbort) prevAbort.abort()
+    const abortController = new AbortController()
+    inFlightUpdateAbortRef.current.set(revKey, abortController)
+
+    const existingAct = activities.find((item) => item.id === updated.id)
+    const editUpdatedAt = nextMonotonicTimestamp(updated.updatedAt ?? existingAct?.updatedAt)
+    const updatedWithStamp: Activity = { ...updated, updatedAt: editUpdatedAt }
+
+    setActivities((current) => current.map((item) => (item.id === updated.id ? updatedWithStamp : item)))
+    setEditingActivity(null)
+    if (!isCloudId(updated.id) || !supabase || !authProfile) {
+      notify('Actividad corregida y actualizada.')
+      return
+    }
+    try {
+      const { data, error } = await supabase
+        .from('activities')
+        .update({
+          title: updatedWithStamp.title,
+          prompt: updatedWithStamp.prompt,
+          options: updatedWithStamp.options,
+          answer: updatedWithStamp.answer,
+          feedback: updatedWithStamp.feedback,
+          details: updatedWithStamp.details ?? {},
+          difficulty: updatedWithStamp.difficulty,
+          topic: updatedWithStamp.topic,
+          type: updatedWithStamp.type,
+          updated_at: editUpdatedAt,
+        })
+        .eq('id', updated.id)
+        .eq('owner_id', authProfile.id)
+        .or(`updated_at.is.null,updated_at.lte.${editUpdatedAt}`)
+        .select('id, updated_at')
+        .abortSignal(abortController.signal)
+
+      if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+        return
+      }
+
+      if (error) {
+        queueSync(
+          'activity_update',
+          { activity: updatedWithStamp, ownerId: authProfile.id, updatedAt: editUpdatedAt, clientRevision },
+          'Actividad guardada localmente; sincronización en la nube pendiente.',
+          authProfile.id,
+          { entityVersion: editUpdatedAt, clientRevision }
+        )
+      } else if (!data || data.length === 0) {
+        const { data: currentRow } = await supabase
+          .from('activities')
+          .select('id, updated_at')
+          .eq('id', updated.id)
+          .eq('owner_id', authProfile.id)
+          .maybeSingle()
+        if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+          return
+        }
+        if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt)) {
+          const rm = removeSyncItemsForEntityIfNotNewer('activity_update', updated.id, authProfile.id, clientRevision, editUpdatedAt)
+          setSyncQueue(rm.queue)
+          notify('Existe una edición más reciente en la nube; se conservó la versión más nueva.')
+        } else {
+          queueSync(
+            'activity_update',
+            { activity: updatedWithStamp, ownerId: authProfile.id, updatedAt: editUpdatedAt, clientRevision },
+            'Actividad guardada localmente; sincronización en la nube pendiente.',
+            authProfile.id,
+            { entityVersion: editUpdatedAt, clientRevision }
+          )
+        }
+      } else {
+        const rm = removeSyncItemsForEntityIfNotNewer('activity_update', updated.id, authProfile.id, clientRevision, editUpdatedAt)
+        setSyncQueue(rm.queue)
+        markSynced()
+        notify('Actividad corregida y sincronizada con Supabase.')
+      }
+    } catch {
+      if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+        return
+      }
+      queueSync(
+        'activity_update',
+        { activity: updatedWithStamp, ownerId: authProfile.id, updatedAt: editUpdatedAt, clientRevision },
+        'Actividad guardada localmente; sincronización en la nube pendiente.',
+        authProfile.id,
+        { entityVersion: editUpdatedAt, clientRevision }
+      )
+    }
   }
 
   const persistCloudTemplate = async (template: EvaluationTemplate, generated: Activity[], queueOnFailure = true) => {
@@ -965,7 +1986,7 @@ function App() {
       error = inserted.error
     }
     if (error || !data) {
-      if (queueOnFailure) queueSync('template', { template, generated }, 'Plantilla guardada en el respaldo local; quedó pendiente de sincronización.')
+      if (queueOnFailure) queueSync('template', { template, generated, ownerId: authProfile.id }, 'Plantilla guardada en el respaldo local; quedó pendiente de sincronización.', authProfile.id)
       return false
     }
     const cloudTemplate = cloudTemplateToLocal(data as CloudTemplateRow)
@@ -992,17 +2013,17 @@ function App() {
     let activityRows: unknown[] | null = null
     let activityError: { message: string } | null = null
     if (!queueOnFailure) {
-      const existingActivities = await supabase.from('activities').select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status').eq('owner_id', authProfile.id).eq('template_id', cloudTemplate.id)
+      const existingActivities = await supabase.from('activities').select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status, updated_at').eq('owner_id', authProfile.id).eq('template_id', cloudTemplate.id)
       activityRows = existingActivities.data
       activityError = existingActivities.error
     }
     if (!activityRows?.length && !activityError) {
-      const insertedActivities = await supabase.from('activities').insert(rows).select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status')
+      const insertedActivities = await supabase.from('activities').insert(rows).select('id, template_id, type, title, topic, difficulty, prompt, options, answer, feedback, details, status, updated_at')
       activityRows = insertedActivities.data
       activityError = insertedActivities.error
     }
     if (activityError || !activityRows) {
-      if (queueOnFailure) queueSync('template', { template, generated }, 'La plantilla se sincronizó, pero sus actividades quedaron pendientes.')
+      if (queueOnFailure) queueSync('template', { template, generated, ownerId: authProfile.id }, 'La plantilla se sincronizó, pero sus actividades quedaron pendientes.', authProfile.id)
       return false
     }
     const cloudActivities = (activityRows as CloudActivityRow[]).map(cloudActivityToLocal)
@@ -1066,18 +2087,100 @@ function App() {
   }
 
   const updateTemplate = async (template: EvaluationTemplate) => {
-    setTemplates((current) => current.map((item) => (item.id === template.id ? template : item)))
-    if (supabase && isCloudId(template.id)) {
-      await supabase.from('evaluation_templates').update({
-        title: template.title,
-        subject: template.subject,
-        description: template.description,
-        objective: template.objective,
-        competency: template.competency,
-        status: template.status,
-      }).eq('id', template.id)
+    const revKey = `template:${template.id}`
+    const clientRevision = (entityRevisionRef.current.get(revKey) ?? 0) + 1
+    entityRevisionRef.current.set(revKey, clientRevision)
+    const prevAbort = inFlightUpdateAbortRef.current.get(revKey)
+    if (prevAbort) prevAbort.abort()
+    const abortController = new AbortController()
+    inFlightUpdateAbortRef.current.set(revKey, abortController)
+
+    const existingTmpl = templates.find((item) => item.id === template.id)
+    const updatedStamp = nextMonotonicTimestamp(template.updatedAt ?? existingTmpl?.updatedAt)
+    const fullTemplate: EvaluationTemplate = { ...template, updatedAt: updatedStamp }
+    setTemplates((current) => current.map((item) => (item.id === template.id ? fullTemplate : item)))
+    if (!isCloudId(template.id) || !supabase || !authProfile) {
+      notify(`Plantilla "${template.title}" actualizada.`)
+      return
     }
-    notify(`Plantilla "${template.title}" actualizada.`)
+    try {
+      const { data, error } = await supabase.from('evaluation_templates').update({
+        title: fullTemplate.title,
+        subject: fullTemplate.subject,
+        description: fullTemplate.description,
+        objective: fullTemplate.objective,
+        competency: fullTemplate.competency,
+        difficulty: fullTemplate.difficulty,
+        content: {
+          concepts: fullTemplate.concepts,
+          situations: fullTemplate.situations,
+          processSteps: fullTemplate.processSteps,
+          categories: fullTemplate.categories,
+          source: fullTemplate.source,
+          schemaVersion: fullTemplate.schemaVersion,
+        },
+        status: fullTemplate.status,
+        updated_at: updatedStamp,
+      })
+        .eq('id', template.id)
+        .eq('owner_id', authProfile.id)
+        .or(`updated_at.is.null,updated_at.lte.${updatedStamp}`)
+        .select('id, updated_at')
+        .abortSignal(abortController.signal)
+
+      if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+        return
+      }
+
+      if (error) {
+        queueSync(
+          'template_update',
+          { template: fullTemplate, ownerId: authProfile.id, updatedAt: updatedStamp, clientRevision },
+          `Plantilla "${template.title}" actualizada localmente; sincronización en la nube pendiente.`,
+          authProfile.id,
+          { entityVersion: updatedStamp, clientRevision }
+        )
+      } else if (!data || data.length === 0) {
+        const { data: currentRow } = await supabase
+          .from('evaluation_templates')
+          .select('id, updated_at')
+          .eq('id', template.id)
+          .eq('owner_id', authProfile.id)
+          .maybeSingle()
+        if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+          return
+        }
+        if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(updatedStamp)) {
+          const rm = removeSyncItemsForEntityIfNotNewer('template_update', template.id, authProfile.id, clientRevision, updatedStamp)
+          setSyncQueue(rm.queue)
+          notify(`Existe una versión más reciente de "${template.title}" en la nube.`)
+        } else {
+          queueSync(
+            'template_update',
+            { template: fullTemplate, ownerId: authProfile.id, updatedAt: updatedStamp, clientRevision },
+            `Plantilla "${template.title}" actualizada localmente; sincronización en la nube pendiente.`,
+            authProfile.id,
+            { entityVersion: updatedStamp, clientRevision }
+          )
+        }
+      } else {
+        const rm = removeSyncItemsForEntityIfNotNewer('template_update', template.id, authProfile.id, clientRevision, updatedStamp)
+        setSyncQueue(rm.queue)
+        markSynced()
+        notify(`Plantilla "${template.title}" actualizada.`)
+      }
+    } catch {
+      if (abortController.signal.aborted || entityRevisionRef.current.get(revKey) !== clientRevision) {
+        return
+      }
+      queueSync(
+        'template_update',
+        { template: fullTemplate, ownerId: authProfile.id, updatedAt: updatedStamp, clientRevision },
+        `Plantilla "${template.title}" actualizada localmente; sincronización en la nube pendiente.`,
+        authProfile.id,
+        { entityVersion: updatedStamp, clientRevision }
+      )
+    }
   }
 
   const deleteTemplate = async (template: EvaluationTemplate) => {
@@ -1086,8 +2189,8 @@ function App() {
     }
     setTemplates((current) => current.filter((item) => item.id !== template.id))
     setActivities((current) => current.filter((item) => item.templateId !== template.id))
-    if (supabase && isCloudId(template.id)) {
-      await supabase.from('evaluation_templates').delete().eq('id', template.id)
+    if (supabase && authProfile && isCloudId(template.id)) {
+      await supabase.from('evaluation_templates').delete().eq('id', template.id).eq('owner_id', authProfile.id)
     }
     notify(`Plantilla "${template.title}" y sus actividades asociadas fueron eliminadas.`)
   }
@@ -1221,8 +2324,9 @@ function App() {
   const reviewActivity = (id: string, status: 'published' | 'draft') => {
     setActivities((current) => current.map((item) => item.id === id ? { ...item, status } : item))
     if (supabase && authProfile && isCloudId(id)) {
-      void supabase.from('activities').update({ status }).eq('id', id).eq('owner_id', authProfile.id).then(({ error }) => {
-        if (error) queueSync('activity_status', { id, status }, 'El estado se actualizó localmente; quedó pendiente de sincronización.')
+      const ownerId = authProfile.id
+      void supabase.from('activities').update({ status }).eq('id', id).eq('owner_id', ownerId).then(({ error }) => {
+        if (error) queueSync('activity_status', { id, status, ownerId }, 'El estado se actualizó localmente; quedó pendiente de sincronización.', ownerId)
         else markSynced()
       })
     }
@@ -1235,11 +2339,12 @@ function App() {
     setActivities((current) => current.map((item) => idSet.has(item.id) ? { ...item, status } : item))
     if (supabase && authProfile) {
       const client = supabase
+      const ownerId = authProfile.id
       const cloudIds = ids.filter(isCloudId)
       if (cloudIds.length > 0) {
-        void client.from('activities').update({ status }).in('id', cloudIds).eq('owner_id', authProfile.id).then(({ error }) => {
+        void client.from('activities').update({ status }).in('id', cloudIds).eq('owner_id', ownerId).then(({ error }) => {
           if (error) {
-            cloudIds.forEach((id) => queueSync('activity_status', { id, status }, 'El estado se actualizó localmente; quedó pendiente de sincronización.'))
+            cloudIds.forEach((id) => queueSync('activity_status', { id, status, ownerId }, 'El estado se actualizó localmente; quedó pendiente de sincronización.', ownerId))
           } else {
             markSynced()
           }
@@ -1254,11 +2359,12 @@ function App() {
     const idSet = new Set(activityIds)
     setActivities((current) => current.map((act) => idSet.has(act.id) && act.status === 'pending' ? { ...act, status: 'published' as const } : act))
     if (supabase && authProfile) {
+      const ownerId = authProfile.id
       const cloudIds = activityIds.filter(isCloudId)
       if (cloudIds.length > 0) {
-        void supabase.from('activities').update({ status: 'published' }).in('id', cloudIds).eq('owner_id', authProfile.id).then(({ error }) => {
+        void supabase.from('activities').update({ status: 'published' }).in('id', cloudIds).eq('owner_id', ownerId).then(({ error }) => {
           if (error) {
-            cloudIds.forEach((id) => queueSync('activity_status', { id, status: 'published' }, 'Estado publicado pendiente de sincronización.'))
+            cloudIds.forEach((id) => queueSync('activity_status', { id, status: 'published', ownerId }, 'Estado publicado pendiente de sincronización.', ownerId))
           } else {
             markSynced()
           }
@@ -1270,8 +2376,92 @@ function App() {
     notify(`Se preparó la sala con ${activityIds.length} actividad${activityIds.length === 1 ? '' : 'es'}. Configura los ajustes de la evaluación.`)
   }
 
-  const persistCloudRoom = async (room: Room, localId: string, queueOnFailure = true) => {
-    if (!supabase || !authProfile || !room.activityIds.every(isCloudId)) return false
+  const persistCloudRoom = async (
+    room: Room,
+    localId: string,
+    queueOnFailure = true,
+    localActivitiesSnapshot?: Record<string, Activity>
+  ): Promise<boolean> => {
+    if (!supabase) return false
+    if (!authProfile) {
+      notify('Inicia sesión como docente para sincronizar la sala con la nube.')
+      return false
+    }
+
+    let currentActivityIds = [...room.activityIds]
+    const workingSnapshot = buildLocalActivitiesSnapshot(currentActivityIds, activities, localActivitiesSnapshot)
+
+    const uniqueLocalActivityIds: string[] = []
+    const seenLocalIds = new Set<string>()
+    for (const id of currentActivityIds) {
+      if (!isCloudId(id) && !seenLocalIds.has(id)) {
+        seenLocalIds.add(id)
+        uniqueLocalActivityIds.push(id)
+      }
+    }
+
+    const syncLocalRoomRefs = (nextIds: string[]) => {
+      setRooms((current) => current.map((r) => (r.id === localId ? { ...r, activityIds: nextIds, activities: nextIds } : r)))
+      try {
+        const storedRooms = readStorage<Partial<Room>[]>('edueval-rooms', []).map(normalizeRoom)
+        localStorage.setItem(
+          'edueval-rooms',
+          JSON.stringify(storedRooms.map((r) => (r.id === localId ? { ...r, activityIds: nextIds, activities: nextIds } : r)))
+        )
+      } catch {
+        // Ignorar errores de almacenamiento al persistir avance parcial de sala
+      }
+    }
+
+    if (uniqueLocalActivityIds.length > 0) {
+      for (const locId of uniqueLocalActivityIds) {
+        const localAct = activities.find((a) => a.id === locId) ?? workingSnapshot[locId]
+        if (!localAct) {
+          const updatedRoom = { ...room, activityIds: currentActivityIds, activities: currentActivityIds }
+          if (queueOnFailure) {
+            queueSync(
+              'room',
+              { room: updatedRoom, localId, ownerId: authProfile.id, localActivitiesSnapshot: workingSnapshot },
+              'La sala contiene actividades no encontradas localmente; sincronización pausada.',
+              authProfile.id
+            )
+          }
+          return false
+        }
+        const syncedAct = await persistCloudActivity(localAct, locId, false)
+        if (!syncedAct || !isCloudId(syncedAct.id)) {
+          const updatedRoom = { ...room, activityIds: currentActivityIds, activities: currentActivityIds }
+          setRooms((current) => current.map((r) => (r.id === localId ? updatedRoom : r)))
+          if (queueOnFailure) {
+            queueSync(
+              'room',
+              { room: updatedRoom, localId, ownerId: authProfile.id, localActivitiesSnapshot: workingSnapshot },
+              'Sala creada en el respaldo local; sus actividades quedaron pendientes de sincronización.',
+              authProfile.id
+            )
+          }
+          return false
+        }
+        delete workingSnapshot[locId]
+        currentActivityIds = currentActivityIds.map((id) => (id === locId ? syncedAct.id : id))
+        room = { ...room, activityIds: currentActivityIds, activities: currentActivityIds }
+        syncLocalRoomRefs(currentActivityIds)
+
+        const patchedQueue = updateSyncItemPayload(
+          { kind: 'room', ownerId: authProfile.id, entityKey: localId },
+          {
+            room,
+            localId,
+            ownerId: authProfile.id,
+            localActivitiesSnapshot: workingSnapshot,
+          }
+        )
+        if (patchedQueue.updated) {
+          setSyncQueue(patchedQueue.queue)
+        }
+      }
+    }
+
     const roomColumns = 'id, owner_id, name, code, instructions, status, question_count, student_limit, time_minutes, score_per_question, shuffle_questions, allow_back, created_at, started_at, finished_at, archived_at'
     let data: unknown = null
     let error: { message: string } | null = null
@@ -1299,30 +2489,54 @@ function App() {
       error = inserted.error
     }
     if (error || !data) {
-      if (queueOnFailure) queueSync('room', { room, localId }, 'Sala creada en el respaldo local; quedó pendiente de sincronización.')
+      if (queueOnFailure) {
+        queueSync(
+          'room',
+          { room, localId, ownerId: authProfile.id, localActivitiesSnapshot: workingSnapshot },
+          'Sala creada en el respaldo local; quedó pendiente de sincronización.',
+          authProfile.id
+        )
+      }
       return false
     }
     const cloudRoomRow = data as CloudRoomRow
     let relations: CloudRoomActivityRow[] = []
     let relationError: { message: string } | null = null
+    let hadExistingRelations = false
     if (!queueOnFailure) {
       const existingRelations = await supabase.from('room_activities').select('room_id, activity_id, position').eq('room_id', cloudRoomRow.id).order('position', { ascending: true })
       relations = (existingRelations.data ?? []) as CloudRoomActivityRow[]
       relationError = existingRelations.error
+      hadExistingRelations = relations.length > 0
     }
     if (!relations.length && !relationError) {
-      const relationRows = room.activities.map((activityId, position) => ({ room_id: cloudRoomRow.id, activity_id: activityId, position }))
+      const relationRows = currentActivityIds.map((activityId, position) => ({ room_id: cloudRoomRow.id, activity_id: activityId, position }))
       const relationResult = await supabase.from('room_activities').insert(relationRows)
       relations = relationRows
       relationError = relationResult.error
     }
     if (relationError) {
-      if (queueOnFailure) await supabase.from('rooms').delete().eq('id', cloudRoomRow.id).eq('owner_id', authProfile.id)
-      if (queueOnFailure) queueSync('room', { room, localId }, 'La sala quedó local; sus actividades quedaron pendientes de vinculación.')
+      if (!hadExistingRelations) {
+        await supabase.from('rooms').delete().eq('id', cloudRoomRow.id).eq('owner_id', authProfile.id)
+      }
+      if (queueOnFailure) {
+        queueSync(
+          'room',
+          { room, localId, ownerId: authProfile.id, localActivitiesSnapshot: workingSnapshot },
+          'La sala quedó local; sus actividades quedaron pendientes de vinculación.',
+          authProfile.id
+        )
+      }
       return false
     }
     const cloudRoom = cloudRoomToLocal(cloudRoomRow, relations)
     setRooms((current) => current.map((item) => item.id === localId ? cloudRoom : item))
+    try {
+      const storedRooms = readStorage<Partial<Room>[]>('edueval-rooms', []).map(normalizeRoom)
+      localStorage.setItem('edueval-rooms', JSON.stringify(storedRooms.map((item) => item.id === localId ? cloudRoom : item)))
+    } catch {
+      // Ignorar errores de almacenamiento al persistir sala sincronizada
+    }
     notify('Sala sincronizada con Supabase y lista para compartir.')
     markSynced()
     return true
@@ -1330,18 +2544,45 @@ function App() {
 
   const persistCloudRoomTransition = async (room: Room, status: RoomStatus, at: string, queueOnFailure = true) => {
     if (!supabase || !authProfile) return false
-    const cloudRoom = isCloudId(room.id) ? room : rooms.find((item) => item.code === room.code && isCloudId(item.id))
-    if (!cloudRoom) {
-      if (queueOnFailure) queueSync('room_transition', { roomCode: room.code, status, at }, 'El cambio de estado quedó pendiente hasta sincronizar la sala.')
+    let cloudRoomId: string | null = isCloudId(room.id)
+      ? room.id
+      : (rooms.find((item) => item.code === room.code && isCloudId(item.id))?.id ?? null)
+    if (!cloudRoomId && !queueOnFailure) {
+      const { data: foundRoom, error: lookupError } = await supabase
+        .from('rooms')
+        .select('id')
+        .eq('owner_id', authProfile.id)
+        .eq('code', room.code)
+        .maybeSingle()
+      if (!lookupError && foundRoom && typeof foundRoom.id === 'string' && isCloudId(foundRoom.id)) {
+        cloudRoomId = foundRoom.id
+      }
+    }
+    if (!cloudRoomId) {
+      if (queueOnFailure) {
+        queueSync(
+          'room_transition',
+          { roomCode: room.code, status, at, ownerId: authProfile.id },
+          'El cambio de estado quedó pendiente hasta sincronizar la sala.',
+          authProfile.id
+        )
+      }
       return false
     }
     const update: Record<string, string | null> = { status }
     if (status === 'active') update.started_at = at
     if (status === 'finished') update.finished_at = at
     if (status === 'archived') update.archived_at = at
-    const { error } = await supabase.from('rooms').update(update).eq('id', cloudRoom.id).eq('owner_id', authProfile.id)
+    const { error } = await supabase.from('rooms').update(update).eq('id', cloudRoomId).eq('owner_id', authProfile.id)
     if (error) {
-      if (queueOnFailure) queueSync('room_transition', { roomCode: room.code, status, at }, 'El estado quedó localmente; el cambio quedó pendiente de sincronización.')
+      if (queueOnFailure) {
+        queueSync(
+          'room_transition',
+          { roomCode: room.code, status, at, ownerId: authProfile.id },
+          'El estado quedó localmente; el cambio quedó pendiente de sincronización.',
+          authProfile.id
+        )
+      }
       return false
     }
     markSynced()
@@ -1384,17 +2625,34 @@ function App() {
   const deleteRoom = async (room: Room) => {
     if (!window.confirm(`¿Deseas eliminar la sala “${room.name}” (${room.code}) y todos sus registros asociados? Esta acción dejará limpia la app y no se puede deshacer.`)) return
     if (isCloudId(room.id)) {
-      if (supabase && authProfile) {
-        try {
-          await supabase.from('attempts').delete().eq('room_id', room.id)
-          await supabase.from('room_participants').delete().eq('room_id', room.id)
-          await supabase.from('room_activities').delete().eq('room_id', room.id)
-          const { error } = await supabase.from('rooms').delete().eq('id', room.id).eq('owner_id', authProfile.id)
-          if (error) notify(`Aviso en la nube: ${error.message}`)
-          else markSynced()
-        } catch {
-          // continuar con limpieza local
+      // RC-FIX-03 (LAB-RC-001): una sala en la nube solo se elimina localmente si la nube confirmó cada borrado.
+      if (!supabase || !authProfile) {
+        notify(`No se pudo eliminar la sala “${room.name}”: inicia sesión con conexión a la nube e inténtalo de nuevo.`)
+        return
+      }
+      const cloud = supabase
+      try {
+        const steps = [
+          { label: 'intentos', run: () => cloud.from('attempts').delete().eq('room_id', room.id) },
+          { label: 'participantes', run: () => cloud.from('room_participants').delete().eq('room_id', room.id) },
+          { label: 'actividades de la sala', run: () => cloud.from('room_activities').delete().eq('room_id', room.id) },
+        ]
+        for (const step of steps) {
+          const { error: stepError } = await step.run()
+          if (stepError) {
+            notify(`No se pudo eliminar la sala “${room.name}” (${step.label}): ${stepError.message}. No se borró nada localmente.`)
+            return
+          }
         }
+        const { data: deletedRows, error } = await cloud.from('rooms').delete().eq('id', room.id).eq('owner_id', authProfile.id).select('id')
+        if (error || !deletedRows || deletedRows.length === 0) {
+          notify(`No se pudo eliminar la sala “${room.name}” en la nube${error ? `: ${error.message}` : ''}. No se borró nada localmente.`)
+          return
+        }
+        markSynced()
+      } catch (deleteError) {
+        notify(`No se pudo eliminar la sala “${room.name}”: ${deleteError instanceof Error ? deleteError.message : 'error de conexión'}. No se borró nada localmente.`)
+        return
       }
     }
     setRooms((current) => current.filter((item) => item.id !== room.id))
@@ -1406,135 +2664,699 @@ function App() {
     try { await navigator.clipboard?.writeText(room.code); notify(`Código ${room.code} copiado para compartir.`) } catch { notify(`Comparte el código ${room.code} con tu grupo.`) }
   }
 
-  const persistCloudAttempt = async (record: StudentAttempt, participantId: string | null, guestToken = studentGuestToken, queueOnFailure = true, responses = studentResponses) => {
-    if (!supabase || !participantId || !guestToken || !isCloudId(record.roomId)) return false
-    const { error } = await supabase.functions.invoke('student-room-guest', {
-      body: {
-        action: 'submit_attempt',
-        roomId: record.roomId,
-        participantId,
-        guestToken,
-        code: record.roomCode,
-        responses: record.answers.map((answer, index) => ({ activityId: answer.activityId, index, response: responses[index] ?? null, timeSeconds: answer.timeSeconds })),
-        attempt: {
-          startedAt: record.startedAt,
-          finishedAt: record.finishedAt,
-          status: record.status,
-          totalQuestions: record.totalQuestions,
-          answeredCount: record.answeredCount,
-          omittedCount: record.omittedCount,
-          correctCount: record.correctCount,
-          score: record.score,
-          maxScore: record.maxScore,
-          answers: record.answers,
-          events: record.events,
-        },
-      },
-    })
-    if (error) {
-      if (queueOnFailure) queueSync('attempt', { record, participantId, responses }, 'El intento quedó en el respaldo local; se sincronizará cuando vuelva la conexión.')
-      return false
+  const persistCloudAttempt = async (
+    record: StudentAttempt,
+    participantId: string | null,
+    guestToken = studentGuestToken,
+    responses = studentResponses
+  ): Promise<
+    | { status: 'confirmed'; attemptId: string; alreadySaved?: boolean }
+    | { status: 'pending_sync'; reason: string; httpStatus: number | null; retryAfterSeconds: number | null }
+    | { status: 'rejected'; error: string; httpStatus: number | null; code: string | null }
+  > => {
+    if (!supabase || !participantId || !guestToken || !isCloudId(record.roomId)) {
+      return { status: 'rejected', error: 'Parámetros de sesión inválidos o sala local.', httpStatus: null, code: null }
     }
-    notify('Tu participación fue registrada y sincronizada.')
-    markSynced()
-    return true
+    const basePayload = buildCloudSubmitPayload({
+      roomId: record.roomId,
+      roomCode: record.roomCode,
+      participantId,
+      guestToken,
+      activitySequence: record.answers.map((answer) => ({ activityId: answer.activityId, occurrenceId: answer.occurrenceId })),
+      responses,
+      answerTimes: Object.fromEntries(record.answers.map((answer, index) => [index, answer.timeSeconds])),
+      startedAt: record.startedAt,
+      finishedAt: record.finishedAt,
+      status: record.status,
+      events: record.events,
+    })
+    let data: unknown = null
+    let error: unknown = null
+    try {
+      const res = await supabase.functions.invoke('student-room-guest', {
+        body: {
+          ...basePayload,
+          attempt: {
+            ...basePayload.attempt,
+            totalQuestions: record.totalQuestions,
+            answeredCount: record.answeredCount,
+            omittedCount: record.omittedCount,
+            correctCount: record.correctCount,
+            score: record.score,
+            maxScore: record.maxScore,
+            answers: record.answers,
+          },
+        },
+      })
+      data = res.data
+      error = res.error
+    } catch (invokeErr) {
+      error = invokeErr
+    }
+    const rawAttemptId = isRecord(data) && typeof data.attemptId === 'string' ? data.attemptId.trim() : ''
+    const hasValidServerAttemptId = rawAttemptId.length > 0
+    if (!error && isRecord(data) && data.ok === true && hasValidServerAttemptId) {
+      setIsOnline(true)
+      markSynced()
+      return { status: 'confirmed', attemptId: rawAttemptId, alreadySaved: Boolean(data.alreadySaved) }
+    }
+    const parsed = await parseGuestFunctionResponse(error, data, 'No se pudo confirmar el identificador de entrega en el servidor.')
+    const classified = classifyGuestSubmitFailure(parsed, hasValidServerAttemptId)
+    if (classified.outcome === 'rejected') {
+      return { status: 'rejected', error: classified.error, httpStatus: classified.httpStatus, code: classified.code }
+    }
+    return {
+      status: 'pending_sync',
+      reason: classified.reason,
+      httpStatus: classified.httpStatus,
+      retryAfterSeconds: classified.retryAfterSeconds,
+    }
   }
 
-  const flushSyncQueue = async () => {
-    if (!supabase || !authProfile || !isOnline || syncing) return
-    const pending = readSyncQueue()
-    if (!pending.length) return
-    setSyncing(true)
-    try {
-      for (const item of pending) {
-        const payload = isRecord(item.payload) ? item.payload : {}
-        let synced = false
-        if (item.kind === 'activity' && isRecord(payload.activity) && typeof payload.localId === 'string') {
-          synced = await persistCloudActivity(payload.activity as Activity, payload.localId, false)
-        } else if (item.kind === 'template' && isRecord(payload.template) && Array.isArray(payload.generated)) {
-          synced = await persistCloudTemplate(payload.template as EvaluationTemplate, payload.generated as Activity[], false)
-        } else if (item.kind === 'room' && isRecord(payload.room) && typeof payload.localId === 'string') {
-          synced = await persistCloudRoom(payload.room as Room, payload.localId, false)
-        } else if (item.kind === 'room_transition' && typeof payload.roomCode === 'string' && typeof payload.status === 'string' && typeof payload.at === 'string') {
-          const room = rooms.find((candidate) => candidate.code === payload.roomCode)
-          synced = room ? await persistCloudRoomTransition(room, payload.status as RoomStatus, payload.at, false) : false
-        } else if (item.kind === 'activity_status' && typeof payload.id === 'string' && typeof payload.status === 'string') {
-          const result = await supabase.from('activities').update({ status: payload.status }).eq('id', payload.id).eq('owner_id', authProfile.id)
-          synced = !result.error
-          if (synced) markSynced()
-        } else if (item.kind === 'attempt' && isRecord(payload.record) && typeof payload.participantId === 'string') {
-          synced = await persistCloudAttempt(payload.record as StudentAttempt, payload.participantId, studentGuestToken ?? readSessionStorage('edueval-student-guest-token'), false, isRecord(payload.responses) ? payload.responses as Record<number, ActivityResponse> : {})
-        }
-        if (synced) {
-          setSyncQueue(removeSyncItem(item.id))
-        } else {
-          if (item.attempts >= 2) {
-            setSyncQueue(removeSyncItem(item.id))
+  const flushStudentSyncQueue = async (manual = false) => {
+    if (!supabase || studentSyncingRef.current) return
+    const pending = readStudentSyncQueue()
+
+    // Si la cola en localStorage está vacía (por ejemplo tras QuotaExceededError),
+    // permitir el reintento manual directo desde memoria cuando la entrega está pending_sync.
+    if (!pending.length) {
+      if (
+        manual &&
+        studentFinished &&
+        studentSubmissionStatus === 'pending_sync' &&
+        studentRoom &&
+        isCloudId(studentRoom.id) &&
+        lastStudentAttempt &&
+        studentParticipantId &&
+        studentGuestToken
+      ) {
+        const logicalId = studentLogicalAttemptId || lastStudentAttempt.id
+        const inFlightKey = `${studentRoom.id}::${studentParticipantId}::${logicalId}`
+        if (inFlightAttemptKeysRef.current.has(inFlightKey)) return
+        inFlightAttemptKeysRef.current.add(inFlightKey)
+        studentSyncingRef.current = true
+        setStudentSyncing(true)
+        try {
+          const targetRoomId = studentRoom.id
+          const targetParticipantId = studentParticipantId
+          const res = await persistCloudAttempt(lastStudentAttempt, targetParticipantId, studentGuestToken, studentResponses)
+          const matchesActive =
+            activeStudentSessionRef.current?.roomId === targetRoomId &&
+            activeStudentSessionRef.current?.participantId === targetParticipantId
+          if (!matchesActive) return
+          if (res.status === 'confirmed') {
+            setStudentSubmissionStatus('confirmed')
+            setStudentSubmissionError(null)
+            setStudentServerAttemptId(res.attemptId)
+            setStudentDurableBackupOk(true)
+            setStudentBackupError(null)
+            setLastStudentAttempt((curr) => (curr ? { ...curr, id: res.attemptId } : curr))
+            notify('¡Tu evaluación fue sincronizada con éxito en el servidor docente!')
+          } else if (res.status === 'rejected') {
+            removeStudentAttemptGuardKey(targetRoomId, lastStudentAttempt.studentName)
+            setStudentSubmissionStatus('rejected')
+            setStudentSubmissionError(res.error)
+            if (res.httpStatus === 401 || res.httpStatus === 403 || res.httpStatus === 404) {
+              studentPollingDisabledRef.current = true
+            }
+            notify(res.error)
           } else {
-            setSyncQueue(markSyncItemFailed(item.id, 'No se pudo completar la sincronización.'))
+            if (res.retryAfterSeconds) {
+              studentAutoFlushBlockedUntilRef.current = Math.max(
+                studentAutoFlushBlockedUntilRef.current,
+                Date.now() + res.retryAfterSeconds * 1000
+              )
+            }
+            setStudentSubmissionError(res.reason)
+            notify(res.reason)
+          }
+        } finally {
+          inFlightAttemptKeysRef.current.delete(inFlightKey)
+          studentSyncingRef.current = false
+          setStudentSyncing(false)
+        }
+      }
+      return
+    }
+
+    studentSyncingRef.current = true
+    setStudentSyncing(true)
+    try {
+      const nowMs = Date.now()
+      for (const item of pending) {
+        if (!manual && (!isSyncItemReadyForRetry(item, nowMs) || nowMs < studentAutoFlushBlockedUntilRef.current)) {
+          continue
+        }
+        const payload = isRecord(item.payload) ? item.payload : null
+        if (!payload || !isRecord(payload.record) || typeof payload.participantId !== 'string') {
+          const rm = removeSyncItemDurable(item.id)
+          setSyncQueue(rm.queue)
+          continue
+        }
+        const guestToken = typeof payload.guestToken === 'string' && payload.guestToken.trim()
+          ? payload.guestToken.trim()
+          : ''
+        const attemptRecord = payload.record as StudentAttempt
+        const roomId = typeof payload.roomId === 'string' ? payload.roomId : attemptRecord.roomId
+        const roomCode = typeof payload.roomCode === 'string' ? payload.roomCode : attemptRecord.roomCode
+        const logicalAttemptId = typeof payload.logicalAttemptId === 'string' ? payload.logicalAttemptId : attemptRecord.id
+        if (!guestToken) {
+          const failRes = markSyncItemFailedDurable(item.id, 'Falta el token de invitado original para autenticar la entrega del participante.')
+          setSyncQueue(failRes.queue)
+          continue
+        }
+        const inFlightKey = `${roomId}::${payload.participantId}::${logicalAttemptId}`
+        if (inFlightAttemptKeysRef.current.has(inFlightKey)) {
+          continue
+        }
+        inFlightAttemptKeysRef.current.add(inFlightKey)
+        let result: Awaited<ReturnType<typeof persistCloudAttempt>>
+        try {
+          const attemptResponses = isRecord(payload.responses) ? (payload.responses as Record<number, ActivityResponse>) : {}
+          result = await persistCloudAttempt(attemptRecord, payload.participantId, guestToken, attemptResponses)
+        } finally {
+          inFlightAttemptKeysRef.current.delete(inFlightKey)
+        }
+
+        const matchesActiveSession =
+          activeStudentSessionRef.current?.roomId === roomId &&
+          activeStudentSessionRef.current?.participantId === payload.participantId
+
+        if (result.status === 'confirmed') {
+          const rm = removeAttemptSyncItems({
+            id: item.id,
+            participantId: payload.participantId,
+            roomId,
+            roomCode,
+            logicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          if (matchesActiveSession) {
+            setStudentSubmissionStatus('confirmed')
+            setStudentSubmissionError(null)
+            setStudentServerAttemptId(result.attemptId)
+            setStudentDurableBackupOk(true)
+            setStudentBackupError(null)
+            setLastStudentAttempt((curr) => (curr && curr.id === attemptRecord.id ? { ...curr, id: result.attemptId } : curr))
+            notify('¡Tu evaluación fue sincronizada con éxito en el servidor docente!')
+          }
+        } else if (result.status === 'rejected') {
+          const rm = removeAttemptSyncItems({
+            id: item.id,
+            participantId: payload.participantId,
+            roomId,
+            roomCode,
+            logicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          removeStudentAttemptGuardKey(roomId, attemptRecord.studentName)
+          if (matchesActiveSession) {
+            setStudentSubmissionStatus('rejected')
+            setStudentSubmissionError(result.error)
+            if (result.httpStatus === 401 || result.httpStatus === 403 || result.httpStatus === 404) {
+              studentPollingDisabledRef.current = true
+            }
+            notify(result.error)
+          }
+        } else {
+          const failRes = markSyncItemFailedDurable(item.id, result.reason, {
+            status: result.httpStatus ?? undefined,
+            retryAfterSeconds: result.retryAfterSeconds,
+          })
+          setSyncQueue(failRes.queue)
+          if (result.retryAfterSeconds) {
+            studentAutoFlushBlockedUntilRef.current = Math.max(
+              studentAutoFlushBlockedUntilRef.current,
+              Date.now() + result.retryAfterSeconds * 1000
+            )
+          }
+          if (matchesActiveSession) {
+            setStudentSubmissionError(result.reason)
+            if (manual) notify(result.reason)
           }
         }
       }
     } finally {
+      studentSyncingRef.current = false
+      setStudentSyncing(false)
+    }
+  }
+
+  const flushSyncQueue = async (manual = false) => {
+    if (!supabase || !authProfile || syncingRef.current) return
+    const pending = readOwnedTeacherSyncQueue(authProfile.id)
+    if (!pending.length) return
+    syncingRef.current = true
+    setSyncing(true)
+    try {
+      const nowMs = Date.now()
+      for (const item of pending) {
+        if (item.ownerId?.trim() !== authProfile.id) continue
+        if (!manual && !isSyncItemReadyForRetry(item, nowMs)) continue
+
+        const payload = isRecord(item.payload) ? item.payload : {}
+        let synced = false
+        let handledVersionRemoval = false
+
+        if (item.kind === 'activity' && isRecord(payload.activity) && typeof payload.localId === 'string') {
+          synced = Boolean(await persistCloudActivity(payload.activity as Activity, payload.localId, false))
+        } else if (item.kind === 'activity_update' && isRecord(payload.activity)) {
+          const act = payload.activity as Activity
+          const editUpdatedAt =
+            (typeof act.updatedAt === 'string' && act.updatedAt) ||
+            (typeof payload.updatedAt === 'string' && payload.updatedAt) ||
+            item.entityVersion ||
+            item.createdAt
+          const result = await supabase
+            .from('activities')
+            .update({
+              title: act.title,
+              prompt: act.prompt,
+              options: act.options,
+              answer: act.answer,
+              feedback: act.feedback,
+              details: act.details ?? {},
+              difficulty: act.difficulty,
+              topic: act.topic,
+              type: act.type,
+              updated_at: editUpdatedAt,
+            })
+            .eq('id', act.id)
+            .eq('owner_id', authProfile.id)
+            .or(`updated_at.is.null,updated_at.lte.${editUpdatedAt}`)
+            .select('id, updated_at')
+
+          if (!result.error && result.data?.length) {
+            synced = true
+          } else if (!result.error) {
+            const { data: currentRow } = await supabase
+              .from('activities')
+              .select('id, updated_at')
+              .eq('id', act.id)
+              .eq('owner_id', authProfile.id)
+              .maybeSingle()
+            if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt)) {
+              synced = true
+            }
+          }
+          if (synced) {
+            const rm = removeSyncItemsForEntityIfNotNewer('activity_update', act.id, authProfile.id, item.clientRevision, editUpdatedAt)
+            setSyncQueue(rm.queue)
+            handledVersionRemoval = true
+            markSynced()
+          }
+        } else if (item.kind === 'template' && isRecord(payload.template) && Array.isArray(payload.generated)) {
+          synced = await persistCloudTemplate(payload.template as EvaluationTemplate, payload.generated as Activity[], false)
+        } else if (item.kind === 'template_update' && isRecord(payload.template)) {
+          const tmpl = payload.template as EvaluationTemplate
+          const editUpdatedAt =
+            (typeof tmpl.updatedAt === 'string' && tmpl.updatedAt) ||
+            (typeof payload.updatedAt === 'string' && payload.updatedAt) ||
+            item.entityVersion ||
+            item.createdAt
+          const result = await supabase
+            .from('evaluation_templates')
+            .update({
+              title: tmpl.title,
+              subject: tmpl.subject,
+              description: tmpl.description,
+              objective: tmpl.objective,
+              competency: tmpl.competency,
+              difficulty: tmpl.difficulty,
+              content: {
+                concepts: tmpl.concepts,
+                situations: tmpl.situations,
+                processSteps: tmpl.processSteps,
+                categories: tmpl.categories,
+                source: tmpl.source,
+                schemaVersion: tmpl.schemaVersion,
+              },
+              status: tmpl.status,
+              updated_at: editUpdatedAt,
+            })
+            .eq('id', tmpl.id)
+            .eq('owner_id', authProfile.id)
+            .or(`updated_at.is.null,updated_at.lte.${editUpdatedAt}`)
+            .select('id, updated_at')
+
+          if (!result.error && result.data?.length) {
+            synced = true
+          } else if (!result.error) {
+            const { data: currentRow } = await supabase
+              .from('evaluation_templates')
+              .select('id, updated_at')
+              .eq('id', tmpl.id)
+              .eq('owner_id', authProfile.id)
+              .maybeSingle()
+            if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt)) {
+              synced = true
+            }
+          }
+          if (synced) {
+            const rm = removeSyncItemsForEntityIfNotNewer('template_update', tmpl.id, authProfile.id, item.clientRevision, editUpdatedAt)
+            setSyncQueue(rm.queue)
+            handledVersionRemoval = true
+            markSynced()
+          }
+        } else if (item.kind === 'room' && isRecord(payload.room) && typeof payload.localId === 'string') {
+          const snapshot = isRecord(payload.localActivitiesSnapshot)
+            ? (payload.localActivitiesSnapshot as Record<string, Activity>)
+            : undefined
+          synced = await persistCloudRoom(payload.room as Room, payload.localId, false, snapshot)
+        } else if (item.kind === 'room_transition' && typeof payload.roomCode === 'string' && typeof payload.status === 'string' && typeof payload.at === 'string') {
+          const room = rooms.find((candidate) => candidate.code === payload.roomCode) ?? normalizeRoom({ id: '', code: payload.roomCode })
+          synced = await persistCloudRoomTransition(room, payload.status as RoomStatus, payload.at, false)
+        } else if (item.kind === 'activity_status' && typeof payload.id === 'string' && typeof payload.status === 'string') {
+          const result = await supabase.from('activities').update({ status: payload.status }).eq('id', payload.id).eq('owner_id', authProfile.id)
+          synced = !result.error
+          if (synced) markSynced()
+        }
+
+        if (synced) {
+          if (!handledVersionRemoval) {
+            const rm = removeSyncItemDurable(item.id)
+            setSyncQueue(rm.queue)
+          }
+        } else {
+          const failRes = markSyncItemFailedDurable(item.id, 'No se pudo completar la sincronización.')
+          setSyncQueue(failRes.queue)
+        }
+      }
+    } finally {
+      syncingRef.current = false
       setSyncing(false)
     }
   }
 
   useEffect(() => {
-    if (!isOnline || !authSession || !authProfile || syncQueue.length === 0 || syncing) return
-    void flushSyncQueue()
-  }, [isOnline, authSession, authProfile])
+    if (!isOnline || !authSession || !authProfile || syncing) return
+    const ownedPending = readOwnedTeacherSyncQueue(authProfile.id)
+    if (ownedPending.length === 0) return
 
-  const finishStudentAttempt = (reason: 'completed' | 'timeout' = 'completed', finalEvent?: AttemptEvent) => {
-    if (!studentRoom) return
-    const key = studentAttemptKey(studentRoom.id, studentName)
-    const attempts = readStorage<string[]>('edueval-attempts', [])
-    if (!attempts.includes(key)) localStorage.setItem('edueval-attempts', JSON.stringify([...attempts, key]))
-    const activityIds = studentQuestionIds.length ? studentQuestionIds : studentRoom.activities
-    const finishTime = new Date().toISOString()
-    const answerRows: AttemptAnswer[] = activityIds.map((activityId, index) => {
-      const activity = activities.find((item) => item.id === activityId)
-      const response = studentResponses[index]
-      const evaluated = activity ? evaluateActivityResponse(activity, response, studentRoom.scorePerQuestion) : { response: '', status: 'omitted' as const, correct: null, score: 0 }
-      const activityMeta = activity?.type === 'trueFalse'
-        ? { hint: evaluated.status === 'answered' ? (activity.details?.trueFalse?.hint ?? activity.feedback) : '', explanation: activity.details?.trueFalse?.explanation ?? '' }
-        : activity?.type === 'singleChoice'
-          ? { hint: evaluated.status === 'answered' ? (activity.details?.singleChoice?.hint ?? activity.feedback) : '', explanation: activity.details?.singleChoice?.explanation ?? '' }
-          : activity?.type === 'matching'
-            ? { hint: evaluated.status === 'answered' ? (activity.details?.matching?.hint ?? activity.feedback) : '', explanation: activity.details?.matching?.explanation ?? '' }
-            : activity?.type === 'sorting'
-              ? { hint: evaluated.status === 'answered' ? (activity.details?.sorting?.hint ?? activity.feedback) : '', explanation: activity.details?.sorting?.explanation ?? '' }
-              : activity?.type === 'ordering'
-                ? { hint: evaluated.status === 'answered' ? (activity.details?.ordering?.hint ?? activity.feedback) : '', explanation: activity.details?.ordering?.explanation ?? '' }
-                : activity?.type === 'scenario'
-                  ? { hint: evaluated.status === 'answered' ? (activity.details?.scenario?.hint ?? activity.feedback) : '', explanation: activity.details?.scenario?.explanation ?? '' }
-                  : {}
-      return { index, activityId, activityTitle: activity?.title ?? 'Actividad eliminada', activityType: activity?.type ?? 'singleChoice', ...evaluated, ...activityMeta, timeSeconds: studentAnswerTimes[index] ?? 0 }
+    const nowMs = Date.now()
+    const readyNow = ownedPending.some((item) => isSyncItemReadyForRetry(item, nowMs))
+    if (readyNow) {
+      void flushSyncQueue(false)
+      return
+    }
+
+    const nextWakeMs = ownedPending.reduce((earliest, item) => {
+      const t = item.nextRetryAt ? Date.parse(item.nextRetryAt) : nowMs
+      return Math.min(earliest, Number.isFinite(t) ? t : nowMs)
+    }, Number.POSITIVE_INFINITY)
+
+    if (Number.isFinite(nextWakeMs)) {
+      const timer = window.setTimeout(() => {
+        void flushSyncQueue(false)
+      }, Math.max(250, nextWakeMs - nowMs))
+      return () => window.clearTimeout(timer)
+    }
+  }, [isOnline, authSession, authProfile, syncing, syncQueue])
+
+  useEffect(() => {
+    if (role !== 'student' || !isOnline || studentSyncing) return
+    if (finishingAttemptRef.current || studentSubmissionStatus === 'submitting') return
+    const pendingAttempts = readStudentSyncQueue()
+    if (pendingAttempts.length === 0) return
+
+    const nowMs = Date.now()
+    const readyNow = pendingAttempts.some((item) => {
+      const p = isRecord(item.payload) ? item.payload : null
+      const rec = p && isRecord(p.record) ? p.record : null
+      const rId = typeof p?.roomId === 'string' ? p.roomId : typeof rec?.roomId === 'string' ? rec.roomId : ''
+      const pId = typeof p?.participantId === 'string' ? p.participantId : typeof rec?.participantId === 'string' ? rec.participantId : ''
+      const lId = typeof p?.logicalAttemptId === 'string' ? p.logicalAttemptId : typeof rec?.id === 'string' ? rec.id : 'single'
+      const key = `${rId}::${pId}::${lId}`
+      if (inFlightAttemptKeysRef.current.has(key)) return false
+      return isSyncItemReadyForRetry(item, nowMs) && nowMs >= studentAutoFlushBlockedUntilRef.current
     })
-    const record: StudentAttempt = { id: `${studentRoom.id}-${studentName.trim().toLowerCase()}-${Date.now()}`, roomId: studentRoom.id, roomName: studentRoom.name, roomCode: studentRoom.code, studentName: studentName.trim(), startedAt: studentStartedAt || finishTime, finishedAt: finishTime, status: reason, totalQuestions: answerRows.length, answeredCount: answerRows.filter((answer) => answer.status === 'answered').length, omittedCount: answerRows.filter((answer) => answer.status === 'omitted').length, correctCount: answerRows.filter((answer) => answer.correct === true).length, score: answerRows.reduce((total, answer) => total + answer.score, 0), maxScore: answerRows.length * studentRoom.scorePerQuestion, answers: answerRows, events: [...studentEvents, ...(finalEvent ? [finalEvent] : []), { type: reason === 'timeout' ? 'timeout' : 'finished', at: finishTime }] }
-    setAttempts((current) => current.some((item) => studentAttemptKey(item.roomId, item.studentName) === key) ? current : [record, ...current])
-    setLastStudentAttempt(record)
-    void persistCloudAttempt(record, studentParticipantId)
-    setStudentFinished(true)
-    setSubmitted(false)
-    notify(reason === 'timeout' ? 'El tiempo terminó. Tu participación fue registrada.' : 'Tu participación fue registrada. El resultado queda disponible para el docente.')
+    if (readyNow) {
+      void flushStudentSyncQueue(false)
+      return
+    }
+
+    const nextWakeMs = pendingAttempts.reduce((earliest, item) => {
+      const t = item.nextRetryAt ? Date.parse(item.nextRetryAt) : nowMs
+      const itemMs = Number.isFinite(t) ? t : nowMs
+      return Math.min(earliest, Math.max(itemMs, studentAutoFlushBlockedUntilRef.current))
+    }, Number.POSITIVE_INFINITY)
+
+    if (Number.isFinite(nextWakeMs)) {
+      const timer = window.setTimeout(() => {
+        void flushStudentSyncQueue(false)
+      }, Math.max(250, nextWakeMs - nowMs))
+      return () => window.clearTimeout(timer)
+    }
+  }, [role, isOnline, studentSyncing, syncQueue, studentSubmissionStatus])
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true)
+      if (role === 'student') {
+        void flushStudentSyncQueue(false)
+      } else if (authProfile) {
+        void flushSyncQueue(false)
+      }
+    }
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [role, authProfile, studentGuestToken, studentParticipantId])
+
+  const finishStudentAttempt = async (reason: 'completed' | 'timeout' = 'completed', finalEvent?: AttemptEvent, responsesOverride?: Record<number, ActivityResponse>) => {
+    if (!studentRoom || studentSubmissionStatus === 'submitting' || finishingAttemptRef.current) return
+    const targetRoom = studentRoom
+    const targetParticipantId = studentParticipantId
+    const targetGuestToken = studentGuestToken
+    const logicalAttemptId = studentLogicalAttemptId || `attempt-${targetRoom.id}-${targetParticipantId || studentName.trim().toLowerCase()}`
+    const inFlightKey = `${targetRoom.id}::${targetParticipantId || 'local'}::${logicalAttemptId}`
+    if (inFlightAttemptKeysRef.current.has(inFlightKey)) return
+
+    let closedLocally = false
+    finishingAttemptRef.current = true
+    inFlightAttemptKeysRef.current.add(inFlightKey)
+    try {
+      setStudentSubmissionStatus('submitting')
+      setStudentSubmissionError(null)
+      const effectiveResponses = responsesOverride ?? studentResponses
+      const key = studentAttemptKey(targetRoom.id, studentName)
+      try {
+        const storedKeys = readStorage<string[]>('edueval-attempts', [])
+        if (!storedKeys.includes(key)) localStorage.setItem('edueval-attempts', JSON.stringify([...storedKeys, key]))
+      } catch {
+        // Ignorar error de cuota en clave de bloqueo local; la cola durable reporta backupOk
+      }
+
+      const activityIds = studentQuestionIds.length ? studentQuestionIds : targetRoom.activities
+      const finishTime = new Date().toISOString()
+      const eventsList: AttemptEvent[] = [
+        ...studentEvents,
+        ...(finalEvent ? [finalEvent] : []),
+        { type: reason === 'timeout' ? 'timeout' : 'finished', at: finishTime },
+      ]
+      let record = buildStudentAttemptRecord({
+        attemptId: logicalAttemptId,
+        room: targetRoom,
+        studentName,
+        questionIds: activityIds,
+        occurrenceIds: studentOccurrenceIds,
+        activities,
+        responses: effectiveResponses,
+        answerTimes: studentAnswerTimes,
+        startedAt: studentStartedAt || finishTime,
+        finishedAt: finishTime,
+        status: reason,
+        events: eventsList,
+      })
+
+      setStudentLogicalAttemptId(logicalAttemptId)
+      setStudentFinishedAt(finishTime)
+      setStudentFinishReason(reason)
+      setStudentServerAttemptId(null)
+      setAttempts((current) => current.some((item) => studentAttemptKey(item.roomId, item.studentName) === key) ? current : [record, ...current])
+      setLastStudentAttempt(record)
+      setStudentFinished(true)
+      closedLocally = true
+      setSubmitted(false)
+
+      const immediateSnapshot: StudentSessionSnapshot = {
+        studentName,
+        roomCode: targetRoom.code,
+        room: targetRoom,
+        participantId: targetParticipantId || '',
+        guestToken: targetGuestToken || '',
+        questionIds: studentQuestionIds,
+        occurrenceIds: studentOccurrenceIds,
+        responses: effectiveResponses,
+        answerTimes: studentAnswerTimes,
+        startedAt: studentStartedAt,
+        events: eventsList,
+        finished: true,
+        playIndex,
+        submitted: false,
+        submissionStatus: 'submitting',
+        logicalAttemptId,
+        finishedAt: finishTime,
+        finishReason: reason,
+        attemptRecord: record,
+        serverAttemptId: null,
+        submissionError: null,
+        durableBackupOk: studentDurableBackupOk,
+      }
+      if (targetParticipantId && targetGuestToken) {
+        try {
+          sessionStorage.setItem(studentSessionStorageKey, JSON.stringify(immediateSnapshot))
+        } catch {
+          // Ignorar error de almacenamiento de sesión
+        }
+      }
+
+      if (supabase && isCloudId(targetRoom.id)) {
+        const durableRes = enqueueSyncItemDurable('attempt', {
+          record,
+          participantId: targetParticipantId,
+          guestToken: targetGuestToken,
+          roomId: targetRoom.id,
+          roomCode: targetRoom.code,
+          logicalAttemptId,
+          responses: effectiveResponses,
+          occurrenceIds: studentOccurrenceIds,
+          enqueuedAt: finishTime,
+        })
+        setSyncQueue(durableRes.queue)
+        if (!durableRes.ok) {
+          setStudentDurableBackupOk(false)
+          setStudentBackupError(durableRes.message || 'No se pudo guardar el respaldo en el almacenamiento local del navegador.')
+        } else {
+          setStudentDurableBackupOk(true)
+          setStudentBackupError(null)
+        }
+
+        const res = await persistCloudAttempt(record, targetParticipantId, targetGuestToken, effectiveResponses)
+        const matchesActive =
+          activeStudentSessionRef.current?.roomId === targetRoom.id &&
+          activeStudentSessionRef.current?.participantId === targetParticipantId
+        if (!matchesActive) return
+
+        if (res.status === 'confirmed') {
+          const rm = removeAttemptSyncItems({
+            participantId: targetParticipantId ?? undefined,
+            roomId: targetRoom.id,
+            roomCode: targetRoom.code,
+            logicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          record = { ...record, id: res.attemptId }
+          setLastStudentAttempt(record)
+          setStudentServerAttemptId(res.attemptId)
+          setStudentSubmissionStatus('confirmed')
+          setStudentSubmissionError(null)
+          setStudentDurableBackupOk(true)
+          setStudentBackupError(null)
+          notify(reason === 'timeout' ? 'El tiempo terminó. Tu entrega fue confirmada por el servidor.' : 'Tu participación fue confirmada por el servidor docente.')
+        } else if (res.status === 'pending_sync') {
+          if (durableRes.item) {
+            const failRes = markSyncItemFailedDurable(durableRes.item.id, res.reason, {
+              status: res.httpStatus ?? undefined,
+              retryAfterSeconds: res.retryAfterSeconds,
+            })
+            setSyncQueue(failRes.queue)
+          }
+          if (res.retryAfterSeconds) {
+            studentAutoFlushBlockedUntilRef.current = Math.max(
+              studentAutoFlushBlockedUntilRef.current,
+              Date.now() + res.retryAfterSeconds * 1000
+            )
+          }
+          setStudentSubmissionStatus('pending_sync')
+          setStudentSubmissionError(res.reason)
+          notify(
+            durableRes.ok
+              ? 'Tus respuestas se guardaron en el respaldo local. Quedan pendientes de sincronización.'
+              : 'No se pudo confirmar ni respaldar automáticamente en este navegador. Descarga tu comprobante antes de cerrar.'
+          )
+        } else {
+          const rm = removeAttemptSyncItems({
+            participantId: targetParticipantId ?? undefined,
+            roomId: targetRoom.id,
+            roomCode: targetRoom.code,
+            logicalAttemptId,
+          })
+          setSyncQueue(rm.queue)
+          removeStudentAttemptGuardKey(targetRoom.id, studentName)
+          setStudentSubmissionStatus('rejected')
+          setStudentSubmissionError(res.error)
+          if (res.httpStatus === 401 || res.httpStatus === 403 || res.httpStatus === 404) {
+            studentPollingDisabledRef.current = true
+          }
+          notify(res.error)
+        }
+      } else {
+        setStudentSubmissionStatus('confirmed')
+        setStudentSubmissionError(null)
+        notify(reason === 'timeout' ? 'El tiempo terminó. Tu participación fue registrada.' : 'Tu participación fue registrada localmente.')
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Ocurrió un error inesperado al registrar tu entrega.'
+      if (!closedLocally) {
+        removeStudentAttemptGuardKey(targetRoom.id, studentName)
+        setStudentSubmissionStatus('working')
+      } else {
+        setStudentSubmissionStatus('pending_sync')
+      }
+      setStudentSubmissionError(errMsg)
+      notify(errMsg)
+    } finally {
+      finishingAttemptRef.current = false
+      inFlightAttemptKeysRef.current.delete(inFlightKey)
+    }
   }
   const joinRoom = async () => {
     if (!roomCode.trim() || !studentName.trim()) return notify('Escribe tu nombre y el código de sala.')
     let room = rooms.find((item) => item.code.toUpperCase() === roomCode.trim().toUpperCase())
-    let cloudJoinData: { participant?: { id?: string }; activities?: CloudActivityRow[]; room?: CloudRoomRow; activityIds?: string[]; guestToken?: string } | null = null
+    type CloudJoinResponse = {
+      participant?: { id?: string }
+      activities?: CloudActivityRow[]
+      room?: CloudRoomRow
+      activityIds?: string[]
+      occurrenceIds?: string[]
+      guestToken?: string
+      alreadyAttempted?: boolean
+      ok?: boolean
+    }
+    let cloudJoinData: CloudJoinResponse | null = null
     if (!room && supabase) {
-      const { data, error } = await supabase.functions.invoke('student-room-guest', { body: { action: 'join', code: roomCode.trim(), displayName: studentName.trim(), participantId: studentParticipantId, guestToken: studentGuestToken } })
-      if (error || !data?.ok) return notify(await functionErrorMessage(error, data, 'No pudimos registrar tu ingreso. Intenta nuevamente.'))
-      if (data.alreadyAttempted) return notify('Ya tienes un intento registrado para esta sala.')
-      cloudJoinData = data
-      if (typeof data.guestToken === 'string') {
-        setStudentGuestToken(data.guestToken)
-        sessionStorage.setItem('edueval-student-guest-token', data.guestToken)
+      let data: unknown = null
+      let error: unknown = null
+      try {
+        const res = await supabase.functions.invoke('student-room-guest', {
+          body: { action: 'join', code: roomCode.trim(), displayName: studentName.trim(), participantId: studentParticipantId, guestToken: studentGuestToken },
+        })
+        data = res.data
+        error = res.error
+      } catch (err) {
+        error = err
       }
-      if (data.room) {
-        const relations = (data.activityIds ?? []).map((activityId: string, position: number) => ({ room_id: data.room.id, activity_id: activityId, position }))
-        room = cloudRoomToLocal(data.room, relations)
+      if (error || !isRecord(data) || data.ok !== true || data.alreadyAttempted === true) {
+        const parsed = await parseGuestFunctionResponse(error, data, 'No pudimos registrar tu ingreso. Intenta nuevamente.')
+        const outcome = classifyGuestJoinOrStatusFailure(parsed)
+        if (outcome === 'already_attempted') return notify('Ya tienes un intento registrado para esta sala.')
+        if (outcome === 'name_conflict') return notify(parsed.message || 'Ese nombre ya está participando en la sala. Usa una variante o recupera tu sesión.')
+        return notify(parsed.message)
+      }
+      setIsOnline(true)
+      cloudJoinData = data as CloudJoinResponse
+      if (typeof cloudJoinData.guestToken === 'string') {
+        setStudentGuestToken(cloudJoinData.guestToken)
+        try { sessionStorage.setItem('edueval-student-guest-token', cloudJoinData.guestToken) } catch {}
+      }
+      if (cloudJoinData.room) {
+        const relations = (cloudJoinData.activityIds ?? []).map((activityId: string, position: number) => ({ room_id: cloudJoinData!.room!.id, activity_id: activityId, position }))
+        room = cloudRoomToLocal(cloudJoinData.room, relations)
         setRooms((current) => mergeCloudItems(current, [room as Room]))
       }
     }
@@ -1545,48 +3367,146 @@ function App() {
     let participantId: string | null = null
     if (supabase && isCloudId(room.id)) {
       if (!cloudJoinData) {
-        const { data, error } = await supabase.functions.invoke('student-room-guest', { body: { action: 'join', code: room.code, displayName: studentName.trim(), participantId: studentParticipantId, guestToken: studentGuestToken } })
-        if (error || !data?.ok) return notify(await functionErrorMessage(error, data, 'No pudimos registrar tu ingreso. Intenta nuevamente.'))
-        if (data.alreadyAttempted) return notify('Ya tienes un intento registrado para esta sala.')
-        cloudJoinData = data
-        if (typeof data.guestToken === 'string') {
-          setStudentGuestToken(data.guestToken)
-          sessionStorage.setItem('edueval-student-guest-token', data.guestToken)
+        let data: unknown = null
+        let error: unknown = null
+        try {
+          const res = await supabase.functions.invoke('student-room-guest', {
+            body: { action: 'join', code: room.code, displayName: studentName.trim(), participantId: studentParticipantId, guestToken: studentGuestToken },
+          })
+          data = res.data
+          error = res.error
+        } catch (err) {
+          error = err
+        }
+        if (error || !isRecord(data) || data.ok !== true || data.alreadyAttempted === true) {
+          const parsed = await parseGuestFunctionResponse(error, data, 'No pudimos registrar tu ingreso. Intenta nuevamente.')
+          const outcome = classifyGuestJoinOrStatusFailure(parsed)
+          if (outcome === 'already_attempted') return notify('Ya tienes un intento registrado para esta sala.')
+          if (outcome === 'name_conflict') return notify(parsed.message || 'Ese nombre ya está participando en la sala. Usa una variante o recupera tu sesión.')
+          return notify(parsed.message)
+        }
+        setIsOnline(true)
+        cloudJoinData = data as CloudJoinResponse
+        if (typeof cloudJoinData.guestToken === 'string') {
+          setStudentGuestToken(cloudJoinData.guestToken)
+          try { sessionStorage.setItem('edueval-student-guest-token', cloudJoinData.guestToken) } catch {}
         }
       }
       const data = cloudJoinData
       if (!data) return notify('No pudimos registrar tu ingreso. Intenta nuevamente.')
+      if (data.room) {
+        const relations = (data.activityIds ?? []).map((activityId: string, position: number) => ({ room_id: data.room!.id, activity_id: activityId, position }))
+        const mappedCloudRoom = cloudRoomToLocal(data.room, relations)
+        room = normalizeRoom({
+          ...mappedCloudRoom,
+          activities: mappedCloudRoom.activities.length ? mappedCloudRoom.activities : room.activities,
+        })
+      }
       participantId = typeof data.participant?.id === 'string' ? data.participant.id : null
       if (typeof data.guestToken === 'string') {
         setStudentGuestToken(data.guestToken)
-        sessionStorage.setItem('edueval-student-guest-token', data.guestToken)
+        try { sessionStorage.setItem('edueval-student-guest-token', data.guestToken) } catch {}
       }
       const cloudActivities = Array.isArray(data.activities) ? data.activities.map((item: CloudActivityRow) => cloudActivityToLocal(item)) : []
       if (cloudActivities.length) setActivities((current) => mergeCloudItems(current, cloudActivities))
     }
+    const joinedAt = new Date().toISOString()
+    const logicalAttemptId = `attempt-${room.id}-${participantId || studentName.trim().toLowerCase()}-${joinedAt}`
+    activeStudentSessionRef.current = { roomId: room.id, participantId }
+    finishingAttemptRef.current = false
+    studentPollingBlockedUntilRef.current = 0
+    studentPollingDisabledRef.current = false
+    studentAutoFlushBlockedUntilRef.current = 0
     setStudentRoom(room)
     setStudentParticipantId(participantId)
-    if (participantId) sessionStorage.setItem('edueval-student-participant-id', participantId)
-    setStudentQuestionIds(room.shuffleQuestions ? shuffleItems(room.activities) : room.activities)
+    if (participantId) {
+      try { sessionStorage.setItem('edueval-student-participant-id', participantId) } catch {}
+    }
+    const serverActivities = Array.isArray(cloudJoinData?.activities) ? cloudJoinData.activities : []
+    const serverOccurrenceIds = Array.isArray(cloudJoinData?.occurrenceIds)
+      ? cloudJoinData.occurrenceIds.map((id) => String(id))
+      : serverActivities.map((a) => {
+          const rec = a as unknown as Record<string, unknown>
+          return String(rec.occurrenceId || rec.id)
+        })
+    const initialQuestionIds = serverActivities.length > 0
+      ? serverActivities.map((a) => String(a.id))
+      : (room.shuffleQuestions ? shuffleItems(room.activities) : room.activities)
+    setStudentOccurrenceIds(serverOccurrenceIds)
+    setStudentQuestionIds(initialQuestionIds)
     setStudentResponses({})
-    const joinedAt = new Date().toISOString()
     setStudentStartedAt(joinedAt)
     setStudentQuestionStartedAt(Date.now())
     setStudentAnswerTimes({})
     setStudentEvents([{ type: 'joined', at: joinedAt }])
     setStudentFinished(false)
+    setStudentLogicalAttemptId(logicalAttemptId)
+    setStudentFinishedAt(null)
+    setStudentFinishReason(null)
+    setStudentServerAttemptId(null)
+    setStudentSubmissionStatus('working')
+    setStudentSubmissionError(null)
+    setStudentDurableBackupOk(true)
+    setStudentBackupError(null)
+    setLastStudentAttempt(null)
     setPlayIndex(0)
     setSubmitted(false)
     if (room.status === 'active') { show('play'); notify('Te has unido a la evaluación.') } else notify('Te has unido. Espera a que el docente inicie la evaluación.')
   }
-  const refreshStudentRoom = async () => {
+  const refreshStudentRoom = async (manual = false) => {
     if (!studentRoom) return
+    if (!manual && (studentPollingDisabledRef.current || Date.now() < studentPollingBlockedUntilRef.current)) {
+      return
+    }
     if (supabase && isCloudId(studentRoom.id) && studentParticipantId && studentGuestToken) {
+      const targetRoomId = studentRoom.id
+      const targetParticipantId = studentParticipantId
       const previousStatus = studentRoom.status
-      const { data, error } = await supabase.functions.invoke('student-room-guest', { body: { action: 'status', code: studentRoom.code, participantId: studentParticipantId, guestToken: studentGuestToken } })
-      if (error || !data?.room) return notify(await functionErrorMessage(error, data, 'No pudimos actualizar el estado de la sala.'))
-      const status = data.room.status as RoomStatus
-      const current = { ...studentRoom, status, startedAt: data.room.started_at ?? studentRoom.startedAt, finishedAt: data.room.finished_at ?? studentRoom.finishedAt, archivedAt: data.room.archived_at ?? studentRoom.archivedAt }
+      let data: unknown = null
+      let error: unknown = null
+      try {
+        const res = await supabase.functions.invoke('student-room-guest', {
+          body: { action: 'status', code: studentRoom.code, participantId: targetParticipantId, guestToken: studentGuestToken },
+        })
+        data = res.data
+        error = res.error
+      } catch (err) {
+        error = err
+      }
+      const matchesActive =
+        activeStudentSessionRef.current?.roomId === targetRoomId &&
+        activeStudentSessionRef.current?.participantId === targetParticipantId
+      if (!matchesActive) return
+
+      if (error || !isRecord(data) || !isRecord(data.room)) {
+        const parsed = await parseGuestFunctionResponse(error, data, 'No pudimos actualizar el estado de la sala.')
+        const outcome = classifyGuestJoinOrStatusFailure(parsed)
+        if (outcome === 'terminal_rejected') {
+          studentPollingDisabledRef.current = true
+          notify(parsed.message)
+          return
+        }
+        if (parsed.retryAfterSeconds) {
+          studentPollingBlockedUntilRef.current = Math.max(
+            studentPollingBlockedUntilRef.current,
+            Date.now() + parsed.retryAfterSeconds * 1000
+          )
+        } else if (parsed.httpStatus === 429) {
+          studentPollingBlockedUntilRef.current = Math.max(studentPollingBlockedUntilRef.current, Date.now() + 10_000)
+        }
+        if (manual) notify(parsed.message)
+        return
+      }
+      studentPollingBlockedUntilRef.current = 0
+      const roomPayload = data.room as Record<string, unknown>
+      const status = roomPayload.status as RoomStatus
+      const current = {
+        ...studentRoom,
+        status,
+        startedAt: typeof roomPayload.started_at === 'string' ? roomPayload.started_at : studentRoom.startedAt,
+        finishedAt: typeof roomPayload.finished_at === 'string' ? roomPayload.finished_at : studentRoom.finishedAt,
+        archivedAt: typeof roomPayload.archived_at === 'string' ? roomPayload.archived_at : studentRoom.archivedAt,
+      }
       setStudentRoom(current)
       if (status === 'active' && previousStatus !== 'active') { setStudentQuestionStartedAt(Date.now()); setStudentEvents((events) => [...events, { type: 'joined', at: new Date().toISOString(), detail: 'La sala fue iniciada por el docente.' }]); show('play'); notify('La evaluación comenzó.') }
       else if ((status === 'finished' || status === 'archived') && previousStatus !== status) notify('El docente cerró esta sala.')
@@ -1599,20 +3519,38 @@ function App() {
     else if (current.status === 'finished' || current.status === 'archived') notify('El docente cerró esta sala.')
   }
   useEffect(() => {
-    if (!studentRoom || !studentParticipantId || !studentGuestToken || !isCloudId(studentRoom.id) || !['waiting', 'active'].includes(studentRoom.status)) return
-    const timer = window.setInterval(() => { void refreshStudentRoom() }, 2500)
+    if (!studentRoom || !studentParticipantId || !studentGuestToken || !isCloudId(studentRoom.id) || !['waiting', 'active'].includes(studentRoom.status) || studentFinished) return
+    const timer = window.setInterval(() => { void refreshStudentRoom(false) }, 2500)
     return () => window.clearInterval(timer)
-  }, [studentRoom?.id, studentRoom?.status, studentParticipantId, studentGuestToken])
+  }, [studentRoom?.id, studentRoom?.status, studentParticipantId, studentGuestToken, studentFinished])
   const leaveStudentSession = () => {
+    activeStudentSessionRef.current = null
+    finishingAttemptRef.current = false
+    inFlightAttemptKeysRef.current.clear()
+    studentPollingBlockedUntilRef.current = 0
+    studentPollingDisabledRef.current = false
+    studentAutoFlushBlockedUntilRef.current = 0
     setStudentRoom(null)
     setStudentParticipantId(null)
     setStudentGuestToken(null)
     setLastStudentAttempt(null)
+    setStudentLogicalAttemptId('')
+    setStudentFinishedAt(null)
+    setStudentFinishReason(null)
+    setStudentServerAttemptId(null)
+    setStudentSubmissionStatus('working')
+    setStudentSubmissionError(null)
+    setStudentDurableBackupOk(true)
+    setStudentBackupError(null)
     sessionStorage.removeItem('edueval-student-participant-id')
     sessionStorage.removeItem('edueval-student-guest-token')
     setStudentFinished(false)
     setRoomCode('')
     setStudentResponses({})
+    setStudentAnswerTimes({})
+    setStudentEvents([])
+    setStudentQuestionIds([])
+    setStudentOccurrenceIds([])
     sessionStorage.removeItem(studentSessionStorageKey)
     show('overview')
   }
@@ -1623,7 +3561,7 @@ function App() {
     const rows = [['intento_id', 'estudiante', 'sala', 'codigo_sala', 'estado', 'inicio', 'finalizacion', 'preguntas', 'respondidas', 'omitidas', 'correctas', 'puntaje', 'puntaje_maximo', 'actividad', 'tipo_actividad', 'estado_respuesta', 'respuesta', 'correcta', 'puntaje_respuesta', 'pista_entregada', 'explicacion_privada', 'tiempo_segundos']]
     attemptsToExport.forEach((attempt) => attempt.answers.forEach((answer) => rows.push([attempt.id, attempt.studentName, attempt.roomName, attempt.roomCode, attempt.status === 'timeout' ? 'tiempo_agotado' : 'finalizada', attempt.startedAt, attempt.finishedAt, String(attempt.totalQuestions), String(attempt.answeredCount), String(attempt.omittedCount), String(attempt.correctCount), String(attempt.score), String(attempt.maxScore), answer.activityTitle, types[answer.activityType].label, answer.status === 'answered' ? 'respondida' : 'omitida', answer.response || 'Sin respuesta', answer.correct === null ? 'no evaluada' : answer.correct ? 'si' : 'no', String(answer.score), answer.hint ?? '', answer.explanation ?? '', String(answer.timeSeconds)])))
     if (rows.length === 1) rows.push(['', 'Sin intentos registrados', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''])
-    const csv = rows.map((row) => row.map((cell) => `"${cell.replaceAll('"', '""')}"`).join(';')).join('\n')
+    const csv = rows.map((row) => row.map((cell) => `"${sanitizeCsvCell(cell).replaceAll('"', '""')}"`).join(';')).join('\n')
     const fileName = roomIdFilter && roomIdFilter !== 'all'
       ? `evaluedu-resultados-${attemptsToExport[0]?.roomCode || 'sala'}.csv`
       : 'evaluedu-resultados.csv'
@@ -1638,7 +3576,14 @@ function App() {
   const submitAnswer = (response: ActivityResponse) => { setStudentResponses((current) => ({ ...current, [playIndex]: response })); setStudentAnswerTimes((current) => ({ ...current, [playIndex]: Math.max(0, Math.round((Date.now() - studentQuestionStartedAt) / 1000)) })); setStudentEvents((events) => [...events, { type: 'answer_submitted', at: new Date().toISOString(), detail: studentActivities[playIndex]?.id }]); setSubmitted(true); notify('Respuesta registrada. La retroalimentación aparece sin revelar la solución.') }
   const goToStudentQuestion = (nextIndex: number) => { setPlayIndex(nextIndex); setStudentQuestionStartedAt(Date.now()); setSubmitted(Object.prototype.hasOwnProperty.call(studentResponses, nextIndex)) }
   const nextStudentQuestion = () => { if (playIndex + 1 >= studentActivities.length) finishStudentAttempt(); else goToStudentQuestion(playIndex + 1) }
-  const skipStudentQuestion = () => { const event: AttemptEvent = { type: 'omitted', at: new Date().toISOString(), detail: studentActivities[playIndex]?.id }; setStudentEvents((events) => [...events, event]); if (playIndex + 1 >= studentActivities.length) finishStudentAttempt('completed', event); else goToStudentQuestion(playIndex + 1) }
+  const skipStudentQuestion = () => {
+    const event: AttemptEvent = { type: 'omitted', at: new Date().toISOString(), detail: studentActivities[playIndex]?.id }
+    const nextResponses = omitQuestionFromResponses(studentResponses, playIndex)
+    setStudentResponses(nextResponses)
+    setStudentEvents((events) => [...events, event])
+    if (playIndex + 1 >= studentActivities.length) finishStudentAttempt('completed', event, nextResponses)
+    else goToStudentQuestion(playIndex + 1)
+  }
   const previousStudentQuestion = () => { if (studentRoom?.allowBack && playIndex > 0) { setStudentEvents((events) => [...events, { type: 'navigated_back', at: new Date().toISOString(), detail: studentActivities[playIndex - 1]?.id }]); goToStudentQuestion(playIndex - 1) } }
 
   if (isSupabaseConfigured && !authChecked) return <AuthLoading />
@@ -1685,8 +3630,8 @@ function App() {
     </header>
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
-      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v1.3</small></div></aside>}
-      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={refreshStudentRoom} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
+      {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v2.0</small></div></aside>}
+      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={() => void refreshStudentRoom(true)} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} onUpdateQuota={handleUpdateInstitutionQuota} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
     {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
@@ -1714,9 +3659,7 @@ function App() {
         initialActivity={editingActivity}
         onCancel={() => setEditingActivity(null)}
         onSave={(updated) => {
-          setActivities((current) => current.map((item) => item.id === updated.id ? updated : item))
-          setEditingActivity(null)
-          notify('Actividad corregida y actualizada.')
+          void updateActivity(updated)
         }}
       />
     )}
@@ -1827,7 +3770,7 @@ function RoleLanding({
         <RoleCard icon={<IconStudent size={26} />} title="Estudiante" description="Ingresa a una sala con el código de tu docente." onClick={() => onChoose('student')} tone="student" />
         <RoleCard icon={<IconAdmin size={26} />} title="Administrador" description="Gestiona docentes, permisos y configuración general." onClick={() => onChoose('admin')} tone="admin" />
       </div>
-      <small className="landing-note">EvaluEdu · v1.3</small>
+      <small className="landing-note">EvaluEdu · v2.0</small>
     </div>
   )
 }
@@ -2243,6 +4186,7 @@ function AdminDashboard({
   setAdminScope,
   institutions,
   onAddInstitution,
+  onUpdateQuota,
   activeInstitution,
   onSelectInstitution,
   teachers,
@@ -2253,6 +4197,7 @@ function AdminDashboard({
   setAdminScope: (scope: 'superadmin' | 'institution') => void
   institutions: Institution[]
   onAddInstitution: (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => void
+  onUpdateQuota: (institution: Institution, nextLimit: number) => void
   activeInstitution: Institution
   onSelectInstitution: (id: string) => void
   teachers: AdminUser[]
@@ -2377,17 +4322,34 @@ function AdminDashboard({
                           </span>
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="primary-button"
-                            style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
-                            onClick={() => {
-                              onSelectInstitution(inst.id)
-                              setAdminScope('institution')
-                            }}
-                          >
-                            Gestionar →
-                          </button>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="primary-button"
+                              style={{ fontSize: '11px', padding: '6px 12px', whiteSpace: 'nowrap' }}
+                              onClick={() => {
+                                onSelectInstitution(inst.id)
+                                setAdminScope('institution')
+                              }}
+                            >
+                              Gestionar →
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              style={{ fontSize: '11px', padding: '6px 10px', whiteSpace: 'nowrap' }}
+                              onClick={() => {
+                                const raw = window.prompt(`Nuevo cupo de licencias para ${inst.name}:`, String(inst.licenseLimit))
+                                if (raw === null) return
+                                const parsed = Number.parseInt(raw.trim(), 10)
+                                if (Number.isFinite(parsed) && parsed >= 1) {
+                                  onUpdateQuota(inst, parsed)
+                                }
+                              }}
+                            >
+                              Ajustar cupo
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -3320,7 +5282,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Falso o Verdadero',
     subtitle: 'Verificación y contraste conceptual',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Capacidad de discernir afirmaciones precisas de conceptos erróneos o confusiones habituales sin depender de la memoria pasiva.',
     studentExperience: 'El estudiante analiza una afirmación. Si la respuesta es incorrecta, la aplicación le envía una pista orientadora para inducir su relectura reflexiva, sin revelarle la clave.',
     contentRequirements: 'Afirmaciones claras con justificación pedagógica y pistas formativas orientadoras.',
@@ -3331,7 +5293,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Opción Única',
     subtitle: 'Discriminación con distractores fundamentados',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Comprensión conceptual profunda y capacidad de descartar alternativas construidas sobre errores conceptuales comunes.',
     studentExperience: 'Opciones barajadas aleatoriamente. Al responder, el alumno recibe retroalimentación explicativa orientada al aprendizaje.',
     contentRequirements: 'Pregunta clara, una única respuesta correcta inequívoca y distractores plausibles del mismo tema.',
@@ -3342,7 +5304,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Asociación de Conceptos',
     subtitle: 'Correspondencia biunívoca entre elementos',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Relación funcional y definición exacta entre términos, causas, personajes o propiedades emparejadas.',
     studentExperience: 'Términos en una columna y definiciones en otra con selector dinámico o arrastre. Pistas orientadoras en emparejamientos fallidos.',
     contentRequirements: 'Mínimo dos pares inequívocos término ↔ definición sin ambigüedades cruzadas.',
@@ -3353,7 +5315,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Clasificación por Categorías',
     subtitle: 'Agrupación taxonómica arrastrar y soltar',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Habilidad para estructurar conceptos o casos bajo etiquetas y criterios taxonómicos rigurosos.',
     studentExperience: 'Cajas de categorías visibles y fichas interactivas para clasificar, con adaptación accesible para pantallas móviles.',
     contentRequirements: 'Categorías bien delimitadas y elementos asignados de forma exclusiva a una categoría.',
@@ -3364,7 +5326,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Ordenamiento Secuencial',
     subtitle: 'Secuenciación lógica o cronológica de procesos',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Comprensión de procesos paso a paso, cronologías históricas o algoritmos procedimentales de resolución.',
     studentExperience: 'Bloques desordenados con controles táctiles para subir o bajar de posición hasta establecer la secuencia correcta.',
     contentRequirements: 'Pasos o eventos sucesivos con un orden lógico único y justificado.',
@@ -3375,19 +5337,19 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Escenario de Decisiones',
     subtitle: 'Criterio situacional con consecuencias reales',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Juicio crítico y toma de decisiones frente a situaciones del mundo real o dilemas profesionales aplicados.',
     studentExperience: 'Lectura inmersiva del caso y toma de postura entre varias opciones. Cada camino despliega consecuencias formativas explicadas.',
     contentRequirements: 'Descripción del contexto situacional, opciones de acción concretas y consecuencias formativas para cada alternativa.',
   },
-  // ACTIVIDADES COMPLEMENTARIAS (v1.3)
+  // ACTIVIDADES COMPLEMENTARIAS (v2.0)
   {
     id: 'multiSelect',
     icon: '☑',
     title: 'Selección de Opción Múltiple',
     subtitle: 'Múltiples respuestas correctas',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Discriminación analítica integral: identificar todos los factores o características válidas de un fenómeno sin omitir elementos esenciales.',
     studentExperience: 'Casillas de verificación múltiples (ej. «selecciona 3 de 5») con evaluación de aciertos y feedback específico por criterio.',
     contentRequirements: 'Premisa multidimensional y opciones donde dos o más son correctas bajo justificación pedagógica.',
@@ -3398,7 +5360,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Completar Espacios Guiado',
     subtitle: 'Texto con banco de conceptos',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Precisión terminológica y dominio de vocabulario técnico en un contexto de párrafo fluido o demostración estructurada.',
     studentExperience: 'Párrafo con huecos numerados y banco cerrado de conceptos para encajar en el lugar correcto.',
     contentRequirements: 'Texto descriptivo con términos clave delimitados y distractores léxicos plausibles.',
@@ -3409,7 +5371,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Detección del Error',
     subtitle: 'Identificación de inconsistencias conceptuales',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Auditoría crítica y pensamiento analítico: capacidad de encontrar el fallo conceptual o la trampa en un procedimiento o argumento.',
     studentExperience: 'El estudiante revisa un conjunto de pasos o afirmaciones y señala cuál es el que rompe la regla o miente.',
     contentRequirements: 'Caso o procedimiento con un error sutil pero conceptualmente verificable y su fundamentación.',
@@ -3420,7 +5382,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Marcar Palabras en el Texto',
     subtitle: 'Identificación interactiva en párrafos de lectura',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Comprensión lectora activa y capacidad de discernir términos clave diana dentro de un contexto textual continuo sin caer en distractores.',
     studentExperience: 'El alumno lee el párrafo y resalta con su dedo o cursor los términos que cumplen el criterio pedagógico solicitado.',
     contentRequirements: 'Párrafo estructurado con palabras diana delimitadas y términos distractores del mismo campo semántico.',
@@ -3431,7 +5393,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Matriz de Doble Entrada',
     subtitle: 'Cruce de propiedades multidimensional',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Capacidad de comparar simultáneamente varios conceptos bajo múltiples criterios (ej. mitocondria vs cloroplasto vs núcleo).',
     studentExperience: 'Tabla con casillas de verificación en los cruces entre filas y columnas, con feedback granular por propiedad.',
     contentRequirements: 'Matriz de filas (elementos), columnas (características) y asignaciones booleanas esperadas.',
@@ -3442,7 +5404,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Diagrama de Venn',
     subtitle: 'Comparación y contraste con intersección central',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Discriminación conceptual profunda: discernir qué atributos pertenecen exclusivamente a un concepto o al otro, y cuáles son compartidos en la intersección.',
     studentExperience: 'Dos conjuntos superpuestos con zona central interactiva. El estudiante clasifica conceptos del banco en Solo A, Ambos o Solo B mediante toques directos.',
     contentRequirements: 'Dos conceptos de contraste, sus características exclusivas y al menos un elemento o propiedad compartida en común.',
@@ -3453,7 +5415,7 @@ const FORMAT_CATALOG: FormatCatalogItem[] = [
     title: 'Respuesta Corta Conceptual',
     subtitle: 'Evocación activa directa sin alternativas visibles',
     status: 'active',
-    badge: 'Activo · v1.3',
+    badge: 'Activo · v2.0',
     evaluates: 'Recuperación activa de la memoria (Recall) y precisión terminológica: el estudiante debe formular la respuesta exacta en lugar de reconocerla pasivamente entre opciones.',
     studentExperience: 'Campo de texto limpio con teclado accesible. Al responder, el estudiante recibe retroalimentación formativa y comprobante de respuesta.',
     contentRequirements: 'Pregunta concreta e inequívoca con al menos una respuesta válida y sus posibles sinónimos o variantes léxicas autorizadas.',
@@ -4326,7 +6288,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 12. DIAGRAMA DE VENN (VENN DIAGRAM) v1.3
+  // 12. DIAGRAMA DE VENN (VENN DIAGRAM) v2.0
   if (matches.vennDiagram?.available && (categories.length >= 2 || concepts.length >= 2)) {
     const setA = categories[0] || concepts[0]?.name || 'Concepto A'
     const setB = categories[1] || concepts[1]?.name || 'Concepto B'
@@ -4364,7 +6326,7 @@ function buildActivitiesFromTemplate(template: EvaluationTemplate): Activity[] {
     })
   }
 
-  // 13. RESPUESTA CORTA CONCEPTUAL (SHORT ANSWER) v1.3
+  // 13. RESPUESTA CORTA CONCEPTUAL (SHORT ANSWER) v2.0
   if (matches.shortAnswer?.available && concepts.length >= 1) {
     const target = concepts[0]
     const prompt = `¿A qué concepto o estructura corresponde la siguiente definición: "${target.definition}"?`
@@ -4578,7 +6540,7 @@ function TemplateBuilder({ initialTemplate, onCancel, onSave }: { initialTemplat
   const [description, setDescription] = useState(savedDraft.description ?? '')
   const [objective, setObjective] = useState(savedDraft.objective ?? '')
   const [competency, setCompetency] = useState(savedDraft.competency ?? '')
-  const difficulty: EvaluationTemplate['difficulty'] = savedDraft.difficulty ?? 'Intermedio'
+  const [difficulty, setDifficulty] = useState<EvaluationTemplate['difficulty']>(savedDraft.difficulty ?? 'Intermedio')
   const [concepts, setConcepts] = useState<ContentConcept[]>(savedDraft.concepts?.length ? savedDraft.concepts : [{ id: 'c1', name: '', definition: '', example: '' }])
   const [situations, setSituations] = useState<ContentSituation[]>(savedDraft.situations?.length ? savedDraft.situations : [{ id: 's1', title: '', context: '', decision: '', consequence: '' }])
   const [processSteps, setProcessSteps] = useState((savedDraft.processSteps ?? []).join('\n'))
@@ -4631,7 +6593,7 @@ function TemplateBuilder({ initialTemplate, onCancel, onSave }: { initialTemplat
   }
   const updateConcept = (id: string, key: keyof ContentConcept, value: string) => setConcepts((current) => current.map((item) => item.id === id ? { ...item, [key]: value } : item))
   const updateSituation = (id: string, key: keyof ContentSituation, value: string) => setSituations((current) => current.map((item) => item.id === id ? { ...item, [key]: value } : item))
-  return <div className="modal-backdrop"><form className="modal-card template-modal" onSubmit={(event) => { event.preventDefault(); handleSave('draft') }}><div className="modal-head"><div><p className="eyebrow">{initialTemplate ? 'EDITAR PLANTILLA DE CONTENIDO' : 'CONSTRUCTOR DE PLANTILLA'}</p><h2>{initialTemplate ? 'Modificar contenido' : 'Estructura tu contenido'}</h2><p className="modal-subtitle">{initialTemplate ? 'Ajusta los objetivos, conceptos o situaciones de este contenido.' : 'La plantilla es la fuente; al aprobarla se generan las actividades compatibles.'}</p></div><button type="button" className="icon-button" onClick={onCancel}>×</button></div><div className="template-progress"><div className="template-progress-head"><div><b>Progreso de la plantilla</b><small>{progress.completed} de {progress.total} criterios completos</small></div><strong>{progress.percent}%</strong></div><div className="progress-track"><span style={{ width: progress.percent + '%' }} /></div><div className="progress-checks">{progress.checks.map((check) => <span className={check.done ? 'done' : ''} key={check.label}>{check.done ? '✓' : '○'} {check.label}</span>)}</div></div><div className="autosave-status">{autosaveStatus || 'Los cambios se guardan localmente mientras editas.'}</div><div className="form-grid"><label>Título de la plantilla *<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Asignatura o área *<input required value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Ej. Ciencias naturales" /></label></div><label>Descripción breve<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} placeholder="¿Qué aprenderá el grupo?" /></label><div className="form-grid"><label>Objetivo de aprendizaje *<textarea required value={objective} onChange={(event) => setObjective(event.target.value)} rows={3} /></label><label>Competencia o capacidad<textarea value={competency} onChange={(event) => setCompetency(event.target.value)} rows={3} /></label></div><label>Respaldo<div className="backup-actions"><button type="button" className="outline-button" onClick={() => setShowPreview(true)}>Vista previa</button><small>Desde la vista previa puedes imprimir o guardar como PDF.</small></div></label><div className="template-block"><div className="block-heading"><div><p className="eyebrow">CONCEPTOS Y DEFINICIONES</p><b>Ideas que deben comprender</b></div><button type="button" className="text-button" onClick={() => setConcepts((current) => [...current, { id: 'c' + Date.now(), name: '', definition: '', example: '' }])}>＋ Agregar concepto</button></div>{concepts.map((concept) => <div className="repeatable-card" key={concept.id}><div className="repeatable-row"><input aria-label="Nombre del concepto" placeholder="Concepto" value={concept.name} onChange={(event) => updateConcept(concept.id, 'name', event.target.value)} /><button type="button" className="remove-button" onClick={() => setConcepts((current) => current.length > 1 ? current.filter((item) => item.id !== concept.id) : current)}>×</button></div><textarea aria-label="Definición" placeholder="Definición" value={concept.definition} onChange={(event) => updateConcept(concept.id, 'definition', event.target.value)} rows={2} /><input aria-label="Ejemplo" placeholder="Ejemplo o característica" value={concept.example} onChange={(event) => updateConcept(concept.id, 'example', event.target.value)} /></div>)}</div><div className="template-block"><div className="block-heading"><div><p className="eyebrow">SITUACIONES Y CONSECUENCIAS</p><b>Casos para decidir y reflexionar</b></div><button type="button" className="text-button" onClick={() => setSituations((current) => [...current, { id: 's' + Date.now(), title: '', context: '', decision: '', consequence: '' }])}>＋ Agregar situación</button></div>{situations.map((situation) => <div className="repeatable-card" key={situation.id}><div className="repeatable-row"><input aria-label="Título de situación" placeholder="Título del caso" value={situation.title} onChange={(event) => updateSituation(situation.id, 'title', event.target.value)} /><button type="button" className="remove-button" onClick={() => setSituations((current) => current.length > 1 ? current.filter((item) => item.id !== situation.id) : current)}>×</button></div><textarea aria-label="Contexto" placeholder="Contexto de la situación" value={situation.context} onChange={(event) => updateSituation(situation.id, 'context', event.target.value)} rows={2} /><div className="form-grid"><input aria-label="Decisión esperada" placeholder="Decisión o pregunta" value={situation.decision} onChange={(event) => updateSituation(situation.id, 'decision', event.target.value)} /><input aria-label="Consecuencia" placeholder="Consecuencia o feedback" value={situation.consequence} onChange={(event) => updateSituation(situation.id, 'consequence', event.target.value)} /></div></div>)}</div><div className="form-grid"><label>Pasos de un proceso<span className="field-hint">Un paso por línea; habilita ordenamiento desde dos pasos.</span><textarea value={processSteps} onChange={(event) => setProcessSteps(event.target.value)} rows={5} placeholder={'Observar\nAnalizar\nDecidir'} /></label><label>Categorías<span className="field-hint">Una categoría por línea; habilita clasificación.</span><textarea value={categories} onChange={(event) => setCategories(event.target.value)} rows={5} placeholder={'Causa\nConsecuencia'} /></label></div><section className="compatibility-preview"><div className="block-heading"><div><p className="eyebrow">COMPATIBILIDAD EN TIEMPO REAL</p><b>Formatos que se generarán al aceptar</b></div></div><div className="compatibility-grid">{Object.entries(types).map(([key, value]) => { const item = matches[key as ActivityType]; return <div className={'compatibility-item ' + (item.available ? '' : 'unavailable')} key={key}><span>{item.available ? '✓' : '×'}</span><b>{value.label}</b><small>{item.available ? 'Se creará automáticamente' : item.reason}</small></div> })}</div></section>{error && <div className="form-error">! {error}</div>}<div className="form-note">✓ Guardar borrador conserva la estructura. Aceptar contenido aprueba la plantilla y crea automáticamente las actividades compatibles; no requiere una segunda aprobación por actividad.</div><div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>Cancelar</button><button type="button" className="outline-button" onClick={() => setShowPreview(true)}>Vista previa</button><button type="submit" className="outline-button">Guardar borrador</button><button type="button" className="primary-button" onClick={() => handleSave('accepted')}>Aceptar contenido</button></div>{showPreview && <TemplatePreview template={currentTemplate} onClose={() => setShowPreview(false)} onPrint={() => window.print()} />}</form></div>
+  return <div className="modal-backdrop"><form className="modal-card template-modal" onSubmit={(event) => { event.preventDefault(); handleSave('draft') }}><div className="modal-head"><div><p className="eyebrow">{initialTemplate ? 'EDITAR PLANTILLA DE CONTENIDO' : 'CONSTRUCTOR DE PLANTILLA'}</p><h2>{initialTemplate ? 'Modificar contenido' : 'Estructura tu contenido'}</h2><p className="modal-subtitle">{initialTemplate ? 'Ajusta los objetivos, conceptos o situaciones de este contenido.' : 'La plantilla es la fuente; al aprobarla se generan las actividades compatibles.'}</p></div><button type="button" className="icon-button" onClick={onCancel}>×</button></div><div className="template-progress"><div className="template-progress-head"><div><b>Progreso de la plantilla</b><small>{progress.completed} de {progress.total} criterios completos</small></div><strong>{progress.percent}%</strong></div><div className="progress-track"><span style={{ width: progress.percent + '%' }} /></div><div className="progress-checks">{progress.checks.map((check) => <span className={check.done ? 'done' : ''} key={check.label}>{check.done ? '✓' : '○'} {check.label}</span>)}</div></div><div className="autosave-status">{autosaveStatus || 'Los cambios se guardan localmente mientras editas.'}</div><div className="form-grid"><label>Título de la plantilla *<input required value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Asignatura o área *<input required value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Ej. Ciencias naturales" /></label><label>Dificultad<select value={difficulty} onChange={(event) => setDifficulty(event.target.value as EvaluationTemplate['difficulty'])}><option value="Inicial">Inicial</option><option value="Intermedio">Intermedio</option><option value="Avanzado">Avanzado</option></select></label></div><label>Descripción breve<textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} placeholder="¿Qué aprenderá el grupo?" /></label><div className="form-grid"><label>Objetivo de aprendizaje *<textarea required value={objective} onChange={(event) => setObjective(event.target.value)} rows={3} /></label><label>Competencia o capacidad<textarea value={competency} onChange={(event) => setCompetency(event.target.value)} rows={3} /></label></div><label>Respaldo<div className="backup-actions"><button type="button" className="outline-button" onClick={() => setShowPreview(true)}>Vista previa</button><small>Desde la vista previa puedes imprimir o guardar como PDF.</small></div></label><div className="template-block"><div className="block-heading"><div><p className="eyebrow">CONCEPTOS Y DEFINICIONES</p><b>Ideas que deben comprender</b></div><button type="button" className="text-button" onClick={() => setConcepts((current) => [...current, { id: 'c' + Date.now(), name: '', definition: '', example: '' }])}>＋ Agregar concepto</button></div>{concepts.map((concept) => <div className="repeatable-card" key={concept.id}><div className="repeatable-row"><input aria-label="Nombre del concepto" placeholder="Concepto" value={concept.name} onChange={(event) => updateConcept(concept.id, 'name', event.target.value)} /><button type="button" className="remove-button" onClick={() => setConcepts((current) => current.length > 1 ? current.filter((item) => item.id !== concept.id) : current)}>×</button></div><textarea aria-label="Definición" placeholder="Definición" value={concept.definition} onChange={(event) => updateConcept(concept.id, 'definition', event.target.value)} rows={2} /><input aria-label="Ejemplo" placeholder="Ejemplo o característica" value={concept.example} onChange={(event) => updateConcept(concept.id, 'example', event.target.value)} /></div>)}</div><div className="template-block"><div className="block-heading"><div><p className="eyebrow">SITUACIONES Y CONSECUENCIAS</p><b>Casos para decidir y reflexionar</b></div><button type="button" className="text-button" onClick={() => setSituations((current) => [...current, { id: 's' + Date.now(), title: '', context: '', decision: '', consequence: '' }])}>＋ Agregar situación</button></div>{situations.map((situation) => <div className="repeatable-card" key={situation.id}><div className="repeatable-row"><input aria-label="Título de situación" placeholder="Título del caso" value={situation.title} onChange={(event) => updateSituation(situation.id, 'title', event.target.value)} /><button type="button" className="remove-button" onClick={() => setSituations((current) => current.length > 1 ? current.filter((item) => item.id !== situation.id) : current)}>×</button></div><textarea aria-label="Contexto" placeholder="Contexto de la situación" value={situation.context} onChange={(event) => updateSituation(situation.id, 'context', event.target.value)} rows={2} /><div className="form-grid"><input aria-label="Decisión esperada" placeholder="Decisión o pregunta" value={situation.decision} onChange={(event) => updateSituation(situation.id, 'decision', event.target.value)} /><input aria-label="Consecuencia" placeholder="Consecuencia o feedback" value={situation.consequence} onChange={(event) => updateSituation(situation.id, 'consequence', event.target.value)} /></div></div>)}</div><div className="form-grid"><label>Pasos de un proceso<span className="field-hint">Un paso por línea; habilita ordenamiento desde dos pasos.</span><textarea value={processSteps} onChange={(event) => setProcessSteps(event.target.value)} rows={5} placeholder={'Observar\nAnalizar\nDecidir'} /></label><label>Categorías<span className="field-hint">Una categoría por línea; habilita clasificación.</span><textarea value={categories} onChange={(event) => setCategories(event.target.value)} rows={5} placeholder={'Causa\nConsecuencia'} /></label></div><section className="compatibility-preview"><div className="block-heading"><div><p className="eyebrow">COMPATIBILIDAD EN TIEMPO REAL</p><b>Formatos que se generarán al aceptar</b></div></div><div className="compatibility-grid">{Object.entries(types).map(([key, value]) => { const item = matches[key as ActivityType]; return <div className={'compatibility-item ' + (item.available ? '' : 'unavailable')} key={key}><span>{item.available ? '✓' : '×'}</span><b>{value.label}</b><small>{item.available ? 'Se creará automáticamente' : item.reason}</small></div> })}</div></section>{error && <div className="form-error">! {error}</div>}<div className="form-note">✓ Guardar borrador conserva la estructura. Aceptar contenido aprueba la plantilla y crea automáticamente las actividades compatibles; no requiere una segunda aprobación por actividad.</div><div className="modal-actions"><button type="button" className="outline-button" onClick={onCancel}>Cancelar</button><button type="button" className="outline-button" onClick={() => setShowPreview(true)}>Vista previa</button><button type="submit" className="outline-button">Guardar borrador</button><button type="button" className="primary-button" onClick={() => handleSave('accepted')}>Aceptar contenido</button></div>{showPreview && <TemplatePreview template={currentTemplate} onClose={() => setShowPreview(false)} onPrint={() => window.print()} />}</form></div>
 }
 function optionsForTemplate(template: EvaluationTemplate, type: ActivityType): string[] {
   const concepts = template.concepts.filter((item) => item.name.trim()).map((item) => item.name)
@@ -4696,7 +6658,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Selección múltiple v1.3: discriminación analítica integral con 2 o más opciones correctas.
+    // Selección múltiple v2.0: discriminación analítica integral con 2 o más opciones correctas.
     multiSelect: {
       context: '',
       options: concepts.length >= 3
@@ -4709,7 +6671,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Completar espacios v1.3: texto con marcadores {{1}}, {{2}} y banco cerrado de conceptos.
+    // Completar espacios v2.0: texto con marcadores {{1}}, {{2}} y banco cerrado de conceptos.
     fillBlanks: {
       context: '',
       textWithBlanks: completeConcepts.length >= 2
@@ -4728,7 +6690,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Detección del error v1.3: 3 a 6 fragmentos donde exactamente uno contiene un error conceptual.
+    // Detección del error v2.0: 3 a 6 fragmentos donde exactamente uno contiene un error conceptual.
     spotError: {
       context: '',
       segments: completeConcepts.length >= 3
@@ -4746,7 +6708,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Marcar palabras v1.3: párrafo continuo con términos diana [palabra*] y distractores [palabra].
+    // Marcar palabras v2.0: párrafo continuo con términos diana [palabra*] y distractores [palabra].
     markWords: {
       context: '',
       text: completeConcepts.length >= 2
@@ -4755,7 +6717,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Matriz de doble entrada v1.3: comparación de conceptos vs criterios.
+    // Matriz de doble entrada v2.0: comparación de conceptos vs criterios.
     gridCheck: {
       context: '',
       rows: (concepts.length >= 2 ? concepts.slice(0, 3) : [{ id: 'r1', name: 'Concepto A' }, { id: 'r2', name: 'Concepto B' }]).map((c, i) => ({ id: `row-${i + 1}`, label: c.name })),
@@ -4793,7 +6755,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Diagrama de Venn v1.3: dos conceptos en contraste, intersección central, items balanceados, pista obligatoria.
+    // Diagrama de Venn v2.0: dos conceptos en contraste, intersección central, items balanceados, pista obligatoria.
     vennDiagram: {
       context: '',
       setA: categories[0] || (concepts[0]?.name ?? 'Conjunto A'),
@@ -4807,7 +6769,7 @@ function createEditorState(template: EvaluationTemplate | undefined): ActivityEd
       hint: '',
       explanation: '',
     },
-    // Respuesta Corta v1.3: evocación activa, variantes aceptadas y tolerancia a tildes/mayúsculas.
+    // Respuesta Corta v2.0: evocación activa, variantes aceptadas y tolerancia a tildes/mayúsculas.
     shortAnswer: {
       context: '',
       prompt: completeConcepts[0] ? `¿A qué concepto corresponde la definición: "${completeConcepts[0].definition}"?` : 'Escribe aquí la pregunta de respuesta corta:',
@@ -7648,26 +9610,35 @@ function generateExamHtmlDocument({
   activities,
   attempt,
   studentResponses,
+  questionOrderIds,
+  submissionStatus,
+  submissionError,
 }: {
   mode: 'blank' | 'student'
   room: Room
   activities: Activity[]
   attempt?: StudentAttempt | null
   studentResponses?: Record<number, ActivityResponse>
+  questionOrderIds?: string[]
+  submissionStatus?: StudentSubmissionStatus
+  submissionError?: string | null
 }): string {
-  const roomActs = room.activities
-    .map((id) => activities.find((a) => a.id === id))
-    .filter(Boolean) as Activity[]
-
   const isStudent = mode === 'student'
-  const printableActs = isStudent ? roomActs : roomActs.filter((a) => a.type !== 'scenario')
-  const excludedScenarios = !isStudent ? roomActs.filter((a) => a.type === 'scenario') : []
+  const receiptEntries = resolveStudentReceiptEntries({
+    mode,
+    roomActivityIds: room.activities,
+    activities,
+    attemptAnswers: attempt?.answers,
+    questionOrderIds,
+    studentResponses,
+  })
+  const excludedScenarios: Activity[] = []
 
   const title = isStudent
     ? `Comprobante de Examen - ${room.code} - ${attempt?.studentName || 'Estudiante'}`
     : `Examen en Blanco - ${room.name} (${room.code})`
 
-  const questionsHtml = printableActs.length === 0
+  const questionsHtml = receiptEntries.length === 0
     ? `
       <div style="text-align: center; padding: 48px 24px; background: #fffbeb; border: 1px dashed #f59e0b; border-radius: 10px; margin: 20px 0;">
         <div style="font-size: 32px; margin-bottom: 10px;">📱</div>
@@ -7677,18 +9648,19 @@ function generateExamHtmlDocument({
         </p>
       </div>
     `
-    : printableActs
-        .map((act, i) => {
+    : receiptEntries
+        .map((entry, i) => {
+          const act = entry.activity
           const qNum = i + 1
           const pts = room.scorePerQuestion
           const formatLabel = types[act.type]?.label || act.type
           const actTitle = act.title
           const actPrompt = act.type === 'trueFalse' ? (act.details?.trueFalse?.statement || act.prompt) : act.prompt
 
-      const studentAnswer = attempt?.answers?.find((a) => a.activityId === act.id) || attempt?.answers?.[i]
+      const studentAnswer = entry.answer
       const wasOmitted = isStudent && (!studentAnswer || studentAnswer.status === 'omitted' || !studentAnswer.response)
       const rawResponse = studentAnswer?.response || ''
-      const structuredResp = studentResponses ? studentResponses[i] : undefined
+      const structuredResp = entry.structuredResponse
 
       let answerBodyHtml = ''
 
@@ -8009,6 +9981,272 @@ function generateExamHtmlDocument({
             }).join('')}
           `
         }
+      } else if (act.type === 'multiSelect') {
+        const msDetails = act.details?.multiSelect as any
+        const rawOptions = (msDetails?.options || (act as any).options || []) as Array<string | { id?: string; label: string }>
+        const options = rawOptions.map((opt, idx) => {
+          if (typeof opt === 'string') return { id: `opt-${idx}`, label: opt }
+          return { id: opt.id || `opt-${idx}`, label: opt.label || '' }
+        })
+        if (!isStudent) {
+          answerBodyHtml = `
+            <div class="exam-subtext">Selecciona todas las opciones que consideres correctas (marca con una cruz las casillas):</div>
+            ${options.map((opt, idx) => {
+              const letter = String.fromCharCode(65 + idx)
+              return `
+                <div class="choice-row">
+                  <span class="exam-check-box" style="padding: 2px 8px; margin-right: 8px;">[ &nbsp; ]</span>
+                  <span class="choice-letter">(${letter})</span>
+                  <span>${escapeHtml(opt.label)}</span>
+                </div>
+              `
+            }).join('')}
+          `
+        } else {
+          const studentValues = structuredResp && structuredResp.type === 'multiSelect'
+            ? structuredResp.values
+            : rawResponse.split(/[,|\n]/).map((s) => s.trim()).filter(Boolean)
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Opciones marcadas por el estudiante:</div>
+            ${options.map((opt, idx) => {
+              const letter = String.fromCharCode(65 + idx)
+              const isSelected = studentValues.includes(opt.id) || studentValues.includes(opt.label)
+              return `
+                <div class="choice-row ${isSelected ? 'choice-selected' : ''}">
+                  <span class="choice-check">${isSelected ? '☑' : '☐'}</span>
+                  <span class="choice-letter">(${letter})</span>
+                  <span>${escapeHtml(opt.label)}</span>
+                  ${isSelected ? '<span class="selected-tag">← [Marcada por el estudiante]</span>' : ''}
+                </div>
+              `
+            }).join('')}
+          `
+        }
+      } else if (act.type === 'fillBlanks') {
+        const fbDetails = act.details?.fillBlanks as any
+        const textWithBlanks = fbDetails?.textWithBlanks || (act as any).textWithBlanks || act.prompt || ''
+        const blanks = (fbDetails?.blanks || (act as any).blanks || []) as Array<{ id: string; answer?: string }>
+        const distractors = (fbDetails?.distractors || (act as any).distractors || []) as string[]
+        const bank = (fbDetails?.bank && Array.isArray(fbDetails.bank) && fbDetails.bank.length > 0)
+          ? fbDetails.bank
+          : [...blanks.map((b: any) => b.answer || ''), ...distractors].filter(Boolean)
+        if (!isStudent) {
+          const renderedText = escapeHtml(textWithBlanks).replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => `<u>&nbsp;&nbsp;[ Espacio ${n} ]&nbsp;&nbsp;</u>`)
+          answerBodyHtml = `
+            <div class="exam-subtext">Completa cada espacio numerado seleccionando la palabra adecuada del banco de opciones:</div>
+            <div style="font-size: 13.5px; line-height: 1.8; margin-bottom: 12px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+              ${renderedText}
+            </div>
+            ${bank.length > 0 ? `
+              <div style="margin-top: 8px;">
+                <b style="font-size: 12px; color: #475569;">Banco de fichas / palabras disponibles:</b>
+                <div style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 6px;">
+                  ${bank.map((w: string) => `<span style="border: 1px solid #cbd5e1; background: #ffffff; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600;">${escapeHtml(w)}</span>`).join('')}
+                </div>
+              </div>
+            ` : ''}
+          `
+        } else {
+          const answersMap: Record<string, string> = structuredResp && structuredResp.type === 'fillBlanks'
+            ? structuredResp.answers
+            : {}
+          if (!Object.keys(answersMap).length && rawResponse) {
+            rawResponse.split('|').forEach((tok) => {
+              const parts = tok.split(':').map((s) => s.trim())
+              if (parts.length === 2) answersMap[parts[0]] = parts[1]
+            })
+          }
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Palabras completadas por el estudiante:</div>
+            <div style="font-size: 13.5px; line-height: 1.8; margin-bottom: 12px; padding: 10px; background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px;">
+              ${escapeHtml(textWithBlanks).replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => {
+                const blankObj = blanks[Number(n) - 1]
+                const ansVal = answersMap[blankObj?.id || `blank_${n}`] || answersMap[n] || answersMap[`Espacio ${n}`] || '(Vacío)'
+                return `<b style="text-decoration: underline; color: #166534;">[${escapeHtml(ansVal)}]</b>`
+              })}
+            </div>
+            ${blanks.length > 0 ? `
+              <table class="matching-table" style="margin-top: 8px;">
+                <thead>
+                  <tr>
+                    <th style="width: 35%;">Espacio</th>
+                    <th style="width: 65%;">Respuesta registrada</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${blanks.map((b: any, idx: number) => {
+                    const val = answersMap[b.id] || answersMap[String(idx + 1)] || answersMap[`Espacio ${idx + 1}`] || rawResponse
+                    return `
+                      <tr>
+                        <td><b>Espacio ${idx + 1} (${escapeHtml(b.id || `blank_${idx + 1}`)})</b></td>
+                        <td class="choice-selected">✍ ${escapeHtml(val || '(Sin respuesta)')}</td>
+                      </tr>
+                    `
+                  }).join('')}
+                </tbody>
+              </table>
+            ` : ''}
+          `
+        }
+      } else if (act.type === 'spotError') {
+        const seDetails = act.details?.spotError as any
+        const rawSegments = (seDetails?.segments || (act as any).segments || []) as Array<{ id?: string; text?: string; hasError?: boolean }>
+        const segments = rawSegments.map((s, idx) => ({
+          id: s.id || `seg-${idx + 1}`,
+          text: s.text || (typeof s === 'string' ? s : ''),
+        }))
+        if (!isStudent) {
+          answerBodyHtml = `
+            <div class="exam-subtext">Lee con atención y marca con una cruz (X) cuál de los siguientes fragmentos contiene un error conceptual:</div>
+            ${segments.map((seg, idx) => {
+              const letter = String.fromCharCode(65 + idx)
+              return `
+                <div class="choice-row" style="margin-bottom: 6px; padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 6px;">
+                  <span class="exam-check-box" style="padding: 2px 8px; margin-right: 8px;">( &nbsp; )</span>
+                  <span class="choice-letter">(${letter})</span>
+                  <span>${escapeHtml(seg.text)}</span>
+                </div>
+              `
+            }).join('')}
+            <div style="margin-top: 10px; font-size: 12px; color: #64748b;">
+              Escribe la corrección del fragmento erróneo:
+              <div style="margin-top: 4px; border-bottom: 1px dashed #94a3b8; height: 22px;"></div>
+            </div>
+          `
+        } else {
+          const selectedSegId = structuredResp && structuredResp.type === 'spotError' ? structuredResp.value : rawResponse
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Fragmento señalado con error por el estudiante:</div>
+            ${segments.map((seg, idx) => {
+              const letter = String.fromCharCode(65 + idx)
+              const isSelected = selectedSegId === seg.id || selectedSegId === seg.text
+              return `
+                <div class="choice-row ${isSelected ? 'choice-selected' : ''}" style="margin-bottom: 6px; padding: 6px 10px; border: 1px solid ${isSelected ? '#86efac' : '#e2e8f0'}; border-radius: 6px;">
+                  <span class="choice-check">${isSelected ? '●' : '○'}</span>
+                  <span class="choice-letter">(${letter})</span>
+                  <span>${escapeHtml(seg.text)}</span>
+                  ${isSelected ? '<span class="selected-tag">← [Señalado con error]</span>' : ''}
+                </div>
+              `
+            }).join('')}
+          `
+        }
+      } else if (act.type === 'markWords') {
+        const mwDetails = act.details?.markWords as any
+        const rawText = mwDetails?.text || (act as any).text || act.prompt || ''
+        const parsed = parseMarkWordsText(rawText)
+        if (!isStudent) {
+          const textDisplay = parsed.segments.length > 0
+            ? parsed.segments.map((seg) => {
+                if (seg.kind === 'text') return escapeHtml(seg.text)
+                return `<span style="display: inline-block; border: 1px solid #94a3b8; border-radius: 4px; padding: 1px 6px; background: #ffffff; margin: 0 2px;">( &nbsp; ) <b>${escapeHtml(seg.text)}</b></span>`
+              }).join('')
+            : escapeHtml(rawText)
+          answerBodyHtml = `
+            <div class="exam-subtext">Lee el siguiente párrafo y encierra en un círculo o marca las palabras clave solicitadas:</div>
+            <div style="font-size: 13.5px; line-height: 2.0; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+              ${textDisplay}
+            </div>
+          `
+        } else {
+          const selectedWords = structuredResp && structuredResp.type === 'markWords'
+            ? structuredResp.values
+            : rawResponse.split(/[,|\n]/).map((s) => s.trim()).filter(Boolean)
+          const studentDisplay = parsed.segments.length > 0
+            ? parsed.segments.map((seg) => {
+                if (seg.kind === 'text') return escapeHtml(seg.text)
+                const isSelected = selectedWords.includes(seg.id) || selectedWords.includes(seg.text)
+                return `<span style="display: inline-block; border: 1px solid ${isSelected ? '#86efac' : '#cbd5e1'}; background: ${isSelected ? '#dcfce7' : '#ffffff'}; color: ${isSelected ? '#14532d' : '#334155'}; font-weight: ${isSelected ? '700' : '500'}; border-radius: 4px; padding: 2px 6px; margin: 0 2px;">${isSelected ? '✓ ' : ''}${escapeHtml(seg.text)}</span>`
+              }).join('')
+            : escapeHtml(rawText)
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Palabras marcadas en el texto por el estudiante:</div>
+            <div style="font-size: 13.5px; line-height: 1.8; margin-bottom: 12px; padding: 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+              ${studentDisplay}
+            </div>
+            ${selectedWords.length > 0 ? `
+              <div style="font-size: 12px; color: #475569;">
+                <b>Términos seleccionados:</b> ${selectedWords.map((w) => escapeHtml(w)).join(' · ')}
+              </div>
+            ` : '<div style="font-size: 12px; color: #94a3b8; font-style: italic;">(Ningún término marcado)</div>'}
+          `
+        }
+      } else if (act.type === 'gridCheck') {
+        const gcDetails = act.details?.gridCheck as any
+        const rows = (gcDetails?.rows || (act as any).rows || []) as Array<{ id: string; label: string }>
+        const columns = (gcDetails?.columns || (act as any).columns || []) as Array<{ id: string; label: string }>
+        if (!isStudent) {
+          answerBodyHtml = `
+            <div class="exam-subtext">Marca con una cruz (X) en cada casilla según corresponda:</div>
+            <table class="exam-table matching-table" style="width: 100%; border-collapse: collapse; margin-top: 8px;">
+              <thead>
+                <tr style="background: #f1f5f9;">
+                  <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: left;">Elemento / Vía</th>
+                  ${columns.map((col) => `<th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center;">${escapeHtml(col.label)}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr>
+                    <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600;">${escapeHtml(row.label)}</td>
+                    ${columns.map(() => `
+                      <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; font-size: 14px;">
+                        [ &nbsp;&nbsp;&nbsp; ]
+                      </td>
+                    `).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `
+        } else {
+          const markedCells = structuredResp && structuredResp.type === 'gridCheck'
+            ? structuredResp.values
+            : rawResponse.split(/[,|\n]/).map((s) => s.trim()).filter(Boolean)
+          answerBodyHtml = `
+            <div class="answer-badge-student">✓ Casillas marcadas por el estudiante en la matriz:</div>
+            <table class="exam-table matching-table" style="width: 100%; border-collapse: collapse; margin-top: 8px;">
+              <thead>
+                <tr style="background: #f1f5f9;">
+                  <th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: left;">Elemento / Vía</th>
+                  ${columns.map((col) => `<th style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center;">${escapeHtml(col.label)}</th>`).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr>
+                    <td style="padding: 8px 10px; border: 1px solid #cbd5e1; font-weight: 600;">${escapeHtml(row.label)}</td>
+                    ${columns.map((col) => {
+                      const cellKey = `${row.id}:${col.id}`
+                      const cellKeyAlt = `${row.label}:${col.label}`
+                      const isChecked = markedCells.includes(cellKey) || markedCells.includes(cellKeyAlt)
+                      return `
+                        <td style="padding: 8px 10px; border: 1px solid #cbd5e1; text-align: center; ${isChecked ? 'background: #f0fdf4;' : ''}">
+                          ${isChecked ? '<span style="color: #15803d; font-weight: 700; font-size: 14px;">☑ Marcada</span>' : '<span style="color: #94a3b8; font-size: 13px;">☐</span>'}
+                        </td>
+                      `
+                    }).join('')}
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          `
+        }
+      }
+
+      if (isStudent && !wasOmitted && !answerBodyHtml && rawResponse) {
+        answerBodyHtml = `
+          <div class="answer-badge-student">
+            ✓ Respuesta entregada: <b>${escapeHtml(rawResponse)}</b>
+          </div>
+        `
+      }
+
+      if (!isStudent && !answerBodyHtml) {
+        answerBodyHtml = `
+          <div class="exam-subtext">Responde en el espacio a continuación:</div>
+          <div style="margin-top: 8px; border-bottom: 1px dashed #94a3b8; height: 28px;"></div>
+        `
       }
 
       return `
@@ -8059,18 +10297,24 @@ function generateExamHtmlDocument({
         </div>
         <div class="field-row">
           <span class="field-label">Resumen:</span>
-          <span class="field-val"><b>${attempt?.answeredCount || 0}</b> respondidas · <b>${attempt?.omittedCount || 0}</b> omitidas (${attempt?.totalQuestions || roomActs.length} preguntas en total)</span>
+          <span class="field-val"><b>${attempt?.answeredCount || 0}</b> respondidas · <b>${attempt?.omittedCount || 0}</b> omitidas (${attempt?.totalQuestions || receiptEntries.length} preguntas en total)</span>
         </div>
       </div>
     `
 
+  const isConfirmed = submissionStatus === 'confirmed'
+  const isRejected = submissionStatus === 'rejected'
   const metaSubtitle = !isStudent
-    ? `Código de sala: <b>${escapeHtml(room.code)}</b> · Total preguntas en papel: <b>${printableActs.length}</b> · Valor por pregunta: <b>${room.scorePerQuestion} pts</b> (${printableActs.length * room.scorePerQuestion} pts totales)${excludedScenarios.length > 0 ? ` · <span style="color:#b45309; font-weight:600;">(${excludedScenarios.length} actividad(es) interactiva(s) omitida(s) para papel)</span>` : ''}`
-    : `Código de sala: <b>${escapeHtml(room.code)}</b> · Evaluación: <b>${escapeHtml(room.name)}</b> · Total preguntas: <b>${roomActs.length}</b>`
+    ? `Código de sala: <b>${escapeHtml(room.code)}</b> · Total preguntas en papel: <b>${receiptEntries.length}</b> · Valor por pregunta: <b>${room.scorePerQuestion} pts</b> (${receiptEntries.length * room.scorePerQuestion} pts totales)${excludedScenarios.length > 0 ? ` · <span style="color:#b45309; font-weight:600;">(${excludedScenarios.length} actividad(es) interactiva(s) omitida(s) para papel)</span>` : ''}`
+    : `Código de sala: <b>${escapeHtml(room.code)}</b> · Evaluación: <b>${escapeHtml(room.name)}</b> · Total preguntas: <b>${receiptEntries.length}</b> · Estado: <b>${isConfirmed ? 'Confirmado en servidor' : isRejected ? 'Respaldo local no confirmado (Rechazado)' : 'Respaldo local (Pendiente)'}</b>`
 
   const footerText = !isStudent
     ? `EvaluEdu · Hoja de evaluación formal para el aula · Aprendizaje activo`
-    : `EvaluEdu · Comprobante oficial de evaluación entregada · Tus respuestas han sido registradas y almacenadas de forma segura bajo custodia docente.`
+    : isConfirmed
+      ? `EvaluEdu · Comprobante oficial de evaluación entregada · Tus respuestas han sido registradas y confirmadas en el servidor docente.`
+      : isRejected
+        ? `EvaluEdu · Respaldo local no confirmado · El servidor rechazó la entrega${submissionError ? ` (${submissionError})` : ''}. Conserva este documento como respaldo local.`
+        : `EvaluEdu · Comprobante de respaldo local (Pendiente de envío) · Las respuestas están pendientes de confirmación remota por el servidor docente.`
 
   return `<!DOCTYPE html>
 <html lang="es">
@@ -8526,7 +10770,7 @@ function generateExamHtmlDocument({
       <div class="brand-badge">
         <span class="brand-logo">E</span>
         <span class="brand-text">EvaluEdu</span>
-        <span class="brand-sub">${isStudent ? 'Comprobante oficial de entrega' : 'Evaluación de aprendizaje activo'}</span>
+        <span class="brand-sub">${isStudent ? (isConfirmed ? 'Comprobante oficial de entrega' : isRejected ? 'Respaldo local no confirmado' : 'Comprobante de respaldo local (Pendiente de envío)') : 'Evaluación de aprendizaje activo'}</span>
       </div>
       <h1 class="exam-title">${escapeHtml(room.name)}</h1>
       <div class="exam-meta-line">${metaSubtitle}</div>
@@ -8607,6 +10851,9 @@ function ExamDocumentModal({
   activities,
   attempt,
   studentResponses,
+  questionOrderIds,
+  submissionStatus,
+  submissionError,
   onClose,
 }: {
   mode: 'blank' | 'student'
@@ -8614,15 +10861,24 @@ function ExamDocumentModal({
   activities: Activity[]
   attempt?: StudentAttempt | null
   studentResponses?: Record<number, ActivityResponse>
+  questionOrderIds?: string[]
+  submissionStatus?: StudentSubmissionStatus
+  submissionError?: string | null
   onClose: () => void
 }) {
   const isStudent = mode === 'student'
-  const roomActs = room.activities
-    .map((id) => activities.find((a) => a.id === id))
-    .filter(Boolean) as Activity[]
-  const printableActs = isStudent ? roomActs : roomActs.filter((a) => a.type !== 'scenario')
-  const excludedScenarios = !isStudent ? roomActs.filter((a) => a.type === 'scenario') : []
-  const hasPrintableQuestions = printableActs.length > 0
+  const isConfirmed = submissionStatus === 'confirmed'
+  const isRejected = submissionStatus === 'rejected'
+  const receiptEntries = resolveStudentReceiptEntries({
+    mode,
+    roomActivityIds: room.activities,
+    activities,
+    attemptAnswers: attempt?.answers,
+    questionOrderIds,
+    studentResponses,
+  })
+  const excludedScenarios: Activity[] = []
+  const hasPrintableQuestions = receiptEntries.length > 0
 
   const htmlDoc = generateExamHtmlDocument({
     mode,
@@ -8630,10 +10886,13 @@ function ExamDocumentModal({
     activities,
     attempt,
     studentResponses,
+    questionOrderIds,
+    submissionStatus,
+    submissionError,
   })
 
   const filename = isStudent
-    ? `comprobante-${room.code}-${(attempt?.studentName || 'estudiante').trim().replace(/\s+/g, '_')}.html`
+    ? `${isConfirmed ? 'comprobante' : isRejected ? 'respaldo-no-confirmado' : 'respaldo-local'}-${room.code}-${(attempt?.studentName || 'estudiante').trim().replace(/\s+/g, '_')}.html`
     : `examen-${room.code}.html`
 
   const handlePrint = () => {
@@ -8651,11 +10910,21 @@ function ExamDocumentModal({
       <div className="modal-card blank-exam-modal printable-template">
         <div className="modal-head no-print">
           <div>
-            <p className="eyebrow">{isStudent ? 'COMPROBANTE DE EVALUACIÓN' : 'RESPALDO IMPRESO / CONTINGENCIA'}</p>
-            <h2>{isStudent ? 'Comprobante oficial de examen entregado' : 'Examen en blanco para el aula'}</h2>
+            <p className="eyebrow">{isStudent ? (isRejected ? 'RESPALDO LOCAL NO CONFIRMADO' : 'COMPROBANTE DE EVALUACIÓN') : 'RESPALDO IMPRESO / CONTINGENCIA'}</p>
+            <h2>
+              {isStudent
+                ? isConfirmed
+                  ? 'Comprobante oficial de examen entregado'
+                  : isRejected
+                    ? 'Respaldo local no confirmado de examen'
+                    : 'Respaldo local de examen (Pendiente de envío)'
+                : 'Examen en blanco para el aula'}
+            </h2>
             <p className="modal-subtitle">
               {isStudent
-                ? 'Documento oficial con tus respuestas registradas, listo para imprimir o guardar en PDF.'
+                ? isRejected
+                  ? 'Respaldo local con las respuestas capturadas en tu intento (sin confirmación en el servidor).'
+                  : 'Documento con tus respuestas registradas, listo para imprimir o guardar en PDF.'
                 : 'Hoja de evaluación lista para fotocopiar o responder en papel si no hay internet o computadoras.'}
             </p>
           </div>
@@ -8671,7 +10940,7 @@ function ExamDocumentModal({
             <div className="warning-banner-copy">
               <b>Aviso pedagógico sobre actividades interactivas:</b>
               <p>
-                Esta sala incluye {excludedScenarios.length} actividad{excludedScenarios.length === 1 ? '' : 'es'} de tipo <i>Escenario de decisiones</i> ({excludedScenarios.map((s) => `«${s.title}»`).join(', ')}). Debido a que los escenarios requieren interactividad secuencial y retroalimentación inmediata, <b>se han omitido de esta versión impresa</b> para salvaguardar la validez de la evaluación. La prueba en papel se organizó automáticamente con las {printableActs.length} actividades restantes ({printableActs.length * room.scorePerQuestion} pts totales).
+                Esta sala incluye {excludedScenarios.length} actividad{excludedScenarios.length === 1 ? '' : 'es'} de tipo <i>Escenario de decisiones</i> ({excludedScenarios.map((s) => `«${s.title}»`).join(', ')}). Debido a que los escenarios requieren interactividad secuencial y retroalimentación inmediata, <b>se han omitido de esta versión impresa</b> para salvaguardar la validez de la evaluación. La prueba en papel se organizó automáticamente con las {receiptEntries.length} actividades restantes ({receiptEntries.length * room.scorePerQuestion} pts totales).
               </p>
             </div>
           </div>
@@ -9809,21 +12078,40 @@ function StudentCompletion({
   attempt,
   activities = [],
   studentResponses,
+  questionOrderIds,
+  submissionStatus = 'confirmed',
+  submissionError = null,
+  durableBackupOk = true,
+  backupError = null,
+  isOnline = true,
+  syncing = false,
+  onRetrySync,
   onLeave,
 }: {
   room: Room | null
   attempt?: StudentAttempt | null
   activities?: Activity[]
   studentResponses?: Record<number, ActivityResponse>
+  questionOrderIds?: string[]
+  submissionStatus?: StudentSubmissionStatus
+  submissionError?: string | null
+  durableBackupOk?: boolean
+  backupError?: string | null
+  isOnline?: boolean
+  syncing?: boolean
+  onRetrySync?: () => Promise<void>
   onLeave: () => void
 }) {
   const [showVoucherModal, setShowVoucherModal] = useState(false)
+  const isConfirmed = submissionStatus === 'confirmed'
+  const isRejected = submissionStatus === 'rejected'
+  const isPending = submissionStatus === 'pending_sync'
 
   const downloadVoucher = () => {
     if (!room || !attempt) return
     const lines = [
       '============================================================',
-      '                   COMPROBANTE DE ENTREGA                   ',
+      `           ${isConfirmed ? 'COMPROBANTE OFICIAL DE ENTREGA' : isRejected ? 'RESPALDO LOCAL NO CONFIRMADO' : 'COMPROBANTE DE RESPALDO LOCAL'}           `,
       '                          EvaluEdu                          ',
       '============================================================',
       `Identificador:       ${attempt.id}`,
@@ -9833,6 +12121,8 @@ function StudentCompletion({
       `Fecha de inicio:     ${formatDateTime(attempt.startedAt)}`,
       `Fecha de entrega:    ${formatDateTime(attempt.finishedAt)}`,
       `Estado:              ${attempt.status === 'timeout' ? 'Tiempo límite completado' : 'Finalizada y entregada'}`,
+      `Sincronización:      ${isConfirmed ? 'Confirmada en servidor docente' : isRejected ? 'No confirmada (rechazada por el servidor)' : 'Pendiente de confirmación remota'}`,
+      ...(isRejected && submissionError ? [`Motivo del rechazo:  ${submissionError}`] : []),
       `Preguntas totales:   ${attempt.totalQuestions}`,
       `Respondidas:         ${attempt.answeredCount}`,
       `Omitidas:            ${attempt.omittedCount}`,
@@ -9844,17 +12134,31 @@ function StudentCompletion({
       ),
       '------------------------------------------------------------',
       'Nota pedagógica y de privacidad:',
-      'Este documento certifica la recepción de tus evidencias en',
-      'el sistema de EvaluEdu. Por criterio formativo institucional,',
-      'la retroalimentación orientadora ya fue entregada en cada',
-      'actividad y el puntaje acumulado es de custodia docente.',
+      ...(isConfirmed
+        ? [
+            'Este documento certifica la recepción y confirmación de tus',
+            'evidencias en el servidor docente de EvaluEdu.',
+          ]
+        : isRejected
+          ? [
+              'Este documento es un respaldo local no confirmado por el servidor.',
+              'La entrega no pudo ser validada de forma remota.',
+            ]
+          : [
+              'Este documento es un respaldo local de las evidencias',
+              'registradas en tu intento. La entrega se encuentra pendiente de',
+              'confirmación remota por el servidor docente.',
+            ]),
+      'Por criterio formativo institucional, la retroalimentación orientadora',
+      'ya fue entregada en cada actividad y el puntaje acumulado es de custodia docente.',
       '============================================================',
     ]
     const content = lines.join('\n')
     const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = `comprobante-${attempt.roomCode}-${attempt.studentName.trim().replace(/\s+/g, '_')}.txt`
+    const filePrefix = isConfirmed ? 'comprobante' : isRejected ? 'respaldo-no-confirmado' : 'respaldo-local'
+    link.download = `${filePrefix}-${attempt.roomCode}-${attempt.studentName.trim().replace(/\s+/g, '_')}.txt`
     link.click()
     URL.revokeObjectURL(link.href)
   }
@@ -9867,25 +12171,134 @@ function StudentCompletion({
       activities,
       attempt,
       studentResponses,
+      questionOrderIds,
+      submissionStatus,
+      submissionError,
     })
-    const filename = `comprobante-${attempt.roomCode}-${attempt.studentName.trim().replace(/\s+/g, '_')}.html`
+    const filePrefix = isConfirmed ? 'comprobante' : isRejected ? 'respaldo-no-confirmado' : 'respaldo-local'
+    const filename = `${filePrefix}-${attempt.roomCode}-${attempt.studentName.trim().replace(/\s+/g, '_')}.html`
     downloadExamHtmlDocument(filename, html)
+  }
+
+  if (submissionStatus === 'submitting') {
+    return (
+      <div className="student-entry">
+        <div className="student-orb completion-orb waiting-pulse">⏳</div>
+        <p className="eyebrow">ENVIANDO EVALUACIÓN</p>
+        <h1>Registrando respuestas…</h1>
+        <p>Estamos enviando tus evidencias de forma segura al docente. Por favor no cierres esta pestaña.</p>
+      </div>
+    )
   }
 
   return (
     <div className="student-entry">
-      <div className="student-orb completion-orb">✓</div>
-      <p className="eyebrow">PARTICIPACIÓN REGISTRADA</p>
-      <h1>¡Terminaste!</h1>
-      <p>Tu participación en <b>{room?.name ?? 'la evaluación'}</b> fue enviada con éxito al docente.</p>
+      <div
+        className="student-orb completion-orb"
+        style={
+          isRejected || (isPending && !durableBackupOk)
+            ? { background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca' }
+            : isPending
+              ? { background: 'var(--accent-warm-subtle)', color: 'var(--accent-warm)', border: '1px solid var(--accent-warm)' }
+              : undefined
+        }
+      >
+        {isConfirmed ? '✓' : isRejected || !durableBackupOk ? '⚠️' : '☁️'}
+      </div>
+      <p
+        className="eyebrow"
+        style={
+          isRejected || (isPending && !durableBackupOk)
+            ? { color: '#b91c1c' }
+            : isPending
+              ? { color: 'var(--accent-warm)' }
+              : undefined
+        }
+      >
+        {isConfirmed
+          ? 'PARTICIPACIÓN REGISTRADA'
+          : isRejected
+            ? 'ENTREGA NO CONFIRMADA'
+            : !durableBackupOk
+              ? 'RESPALDO AUTOMÁTICO NO DISPONIBLE'
+              : 'EVALUACIÓN GUARDADA LOCALMENTE'}
+      </p>
+      <h1>
+        {isConfirmed
+          ? '¡Terminaste!'
+          : isRejected
+            ? 'Entrega no confirmada por el servidor'
+            : !durableBackupOk
+              ? 'No cierres esta pestaña todavía'
+              : 'Tus respuestas están a salvo'}
+      </h1>
+      <p>
+        {isConfirmed ? (
+          <>Tu participación en <b>{room?.name ?? 'la evaluación'}</b> fue enviada con éxito al docente.</>
+        ) : isRejected ? (
+          <>El servidor no pudo confirmar tu entrega en <b>{room?.name ?? 'la evaluación'}</b>. Descarga tu respaldo local no confirmado antes de salir.</>
+        ) : !durableBackupOk ? (
+          <>Tus respuestas siguen activas en esta pestaña, pero el navegador no permitió guardar el respaldo automático local. Descarga tu respaldo antes de salir.</>
+        ) : (
+          <>Tus evidencias quedaron respaldadas en este dispositivo. La entrega en el servidor docente está <b>pendiente de sincronización</b> por conexión a internet.</>
+        )}
+      </p>
       <div className="entry-card completion-card">
-        <div className="completion-line">
-          <span>✓</span>
-          <div>
-            <b>Respuesta recibida en el servidor</b>
-            <small>Tus evidencias y tiempos quedaron registrados de forma segura.</small>
+        {isConfirmed ? (
+          <div className="completion-line">
+            <span>✓</span>
+            <div>
+              <b>Respuesta recibida en el servidor</b>
+              <small>Tus evidencias y tiempos quedaron registrados de forma segura.</small>
+            </div>
           </div>
-        </div>
+        ) : isRejected ? (
+          <div className="exam-scenario-warning-banner error" role="alert">
+            <span className="warning-banner-icon">⚠️</span>
+            <div className="warning-banner-copy">
+              <b>Entrega rechazada por el servidor (no confirmada)</b>
+              <p>{submissionError || 'El servidor rechazó la entrega de esta evaluación.'}</p>
+            </div>
+          </div>
+        ) : !durableBackupOk ? (
+          <div className="exam-scenario-warning-banner error" role="alert">
+            <span className="warning-banner-icon">⚠️</span>
+            <div className="warning-banner-copy">
+              <b>No se pudo guardar el respaldo en el almacenamiento del navegador</b>
+              <p>
+                {backupError || 'El dispositivo no aceptó el guardado local automático.'} Conserva esta pestaña abierta, descarga tu respaldo (.html o .txt) y reintenta la sincronización cuando haya conexión.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="completion-line" style={{ background: 'var(--accent-warm-subtle)', border: '1px solid var(--accent-warm)' }}>
+            <span style={{ color: 'var(--accent-warm)' }}>⏳</span>
+            <div>
+              <b style={{ color: 'var(--ink)' }}>Pendiente de sincronización remota</b>
+              <small style={{ color: 'var(--muted)' }}>
+                {!isOnline
+                  ? 'Sin conexión en este momento. Tus respuestas permanecen respaldadas en este dispositivo y se enviarán al recuperar la red.'
+                  : submissionError
+                    ? `Pendiente de confirmación (${submissionError}). Tus respuestas permanecen respaldadas en este dispositivo.`
+                    : 'No te preocupes: tus respuestas están protegidas en este dispositivo. Reintentaremos el envío en cuanto haya red sana.'}
+              </small>
+            </div>
+          </div>
+        )}
+
+        {isPending && (
+          <div style={{ marginTop: '10px', marginBottom: '4px' }}>
+            <button
+              type="button"
+              className="primary-button wide"
+              disabled={syncing}
+              onClick={() => void onRetrySync?.()}
+            >
+              {syncing ? 'Sincronizando con el servidor…' : '🔄 Reintentar sincronización ahora'}
+            </button>
+          </div>
+        )}
+
         {attempt && room && (
           <div className="completion-voucher-box">
             <div className="voucher-meta">
@@ -9898,26 +12311,56 @@ function StudentCompletion({
                 type="button"
                 className="primary-button wide"
                 onClick={() => setShowVoucherModal(true)}
-                title="Ver e imprimir tu comprobante oficial con formato formal idéntico al examen"
+                title={
+                  isConfirmed
+                    ? 'Ver e imprimir tu comprobante oficial con formato formal idéntico al examen'
+                    : isRejected
+                      ? 'Ver e imprimir tu respaldo local no confirmado'
+                      : 'Ver e imprimir tu respaldo local con formato formal idéntico al examen'
+                }
               >
-                📄 Ver e Imprimir Comprobante Oficial
+                {isConfirmed
+                  ? '📄 Ver e Imprimir Comprobante Oficial'
+                  : isRejected
+                    ? '📄 Ver e Imprimir Respaldo Local (No confirmado)'
+                    : '📄 Ver e Imprimir Respaldo Local (Pendiente)'}
               </button>
               <button
                 type="button"
                 className="outline-button wide voucher-download-btn"
                 onClick={handleDownloadHtmlVoucher}
-                title="Descargar comprobante en documento HTML listo para guardar o imprimir"
+                title={
+                  isConfirmed
+                    ? 'Descargar comprobante oficial en documento HTML'
+                    : isRejected
+                      ? 'Descargar respaldo local no confirmado en documento HTML'
+                      : 'Descargar respaldo local en documento HTML'
+                }
               >
-                📥 Descargar Comprobante (.html)
+                {isConfirmed
+                  ? '📥 Descargar Comprobante (.html)'
+                  : isRejected
+                    ? '📥 Descargar Respaldo Local No Confirmado (.html)'
+                    : '📥 Descargar Respaldo Local (.html)'}
               </button>
               <button
                 type="button"
                 className="text-button wide"
-                style={{ fontSize: '11.5px', color: '#64748b', padding: '4px' }}
+                style={{ fontSize: '11.5px', color: 'var(--muted)', padding: '4px' }}
                 onClick={downloadVoucher}
-                title="Descargar respaldo secundario en texto plano"
+                title={
+                  isConfirmed
+                    ? 'Descargar comprobante en texto plano'
+                    : isRejected
+                      ? 'Descargar respaldo local no confirmado en texto plano'
+                      : 'Descargar respaldo local en texto plano'
+                }
               >
-                Descargar respaldo ligero (.txt)
+                {isConfirmed
+                  ? 'Descargar comprobante ligero (.txt)'
+                  : isRejected
+                    ? 'Descargar respaldo local no confirmado (.txt)'
+                    : 'Descargar respaldo local ligero (.txt)'}
               </button>
             </div>
           </div>
@@ -9936,6 +12379,9 @@ function StudentCompletion({
           activities={activities}
           attempt={attempt}
           studentResponses={studentResponses}
+          questionOrderIds={questionOrderIds}
+          submissionStatus={submissionStatus}
+          submissionError={submissionError}
           onClose={() => setShowVoucherModal(false)}
         />
       )}
@@ -10032,7 +12478,7 @@ function PlayView({
   const runtime = activityRuntime(item)
   const canSubmit = isResponseComplete(item, draftResponse)
   const changeSimple = (value: string) =>
-    setDraftResponse(item.type === 'trueFalse' ? { type: 'trueFalse', value } : { type: 'singleChoice', value })
+    setDraftResponse(selectSimpleChoiceResponse(item.type, value))
 
   const answeredCount = Object.keys(responsesRecorded ?? {}).length
   const isLastQuestion = index + 1 >= totalCount
@@ -10200,27 +12646,27 @@ function PlayView({
               onChange={(order) => setDraftResponse({ type: 'ordering', order })}
             />
           ) : (
-            (item.type === 'trueFalse' ? ['Verdadero', 'Falso'] : runtime.singleChoice.options.map((option) => option.label)).map(
+            getSimpleChoiceDisplayOptions(item.type, runtime.singleChoice).map(
               (option) => (
                 <button
-                  key={option}
+                  key={option.value}
                   className={
                     'answer-option ' +
                     ((draftResponse.type === 'trueFalse' || draftResponse.type === 'singleChoice') &&
-                    draftResponse.value === option
+                    draftResponse.value === option.value
                       ? 'chosen'
                       : '')
                   }
-                  onClick={() => !submitted && changeSimple(option)}
+                  onClick={() => !submitted && changeSimple(option.value)}
                   disabled={submitted}
                 >
                   <span className="option-mark">
                     {(draftResponse.type === 'trueFalse' || draftResponse.type === 'singleChoice') &&
-                    draftResponse.value === option
+                    draftResponse.value === option.value
                       ? '✓'
                       : '○'}
                   </span>
-                  {option}
+                  {option.label}
                 </button>
               )
             )
@@ -10446,13 +12892,9 @@ function MultiSelectQuestion({
 }) {
   const selectedValues = response.values || []
 
-  const toggleOption = (identifier: string) => {
+  const toggleOption = (option: { id?: string; label?: string }) => {
     if (disabled) return
-    const isSelected = selectedValues.includes(identifier)
-    const nextValues = isSelected
-      ? selectedValues.filter((v) => v !== identifier)
-      : [...selectedValues, identifier]
-    onChange(nextValues)
+    onChange(toggleMultiSelectOption(selectedValues, option))
   }
 
   return (
@@ -10462,15 +12904,15 @@ function MultiSelectQuestion({
       </p>
       <div className="multi-select-options" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {runtime.options.map((option) => {
-          const identifier = option.label || option.id
-          const isSelected = selectedValues.includes(identifier) || selectedValues.includes(option.id)
+          const identifier = getMultiSelectOptionId(option)
+          const isSelected = selectedValues.includes(identifier)
           return (
             <button
               key={option.id}
               type="button"
               disabled={disabled}
               className={`answer-option ${isSelected ? 'chosen' : ''}`}
-              onClick={() => toggleOption(identifier)}
+              onClick={() => toggleOption(option)}
               style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: '12px' }}
             >
               <span className="option-mark">{isSelected ? '☑' : '☐'}</span>
@@ -10497,32 +12939,21 @@ function FillBlanksQuestion({
   const answers = response.answers || {}
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null)
 
-  const wordBank = scrambleWordBank(
-    runtime.blanks.map((b) => b.answer),
-    runtime.distractors || []
-  )
+  const chips = getFillBlanksBankChips(runtime, answers)
 
-  const usedWords = Object.values(answers)
-
-  const selectWord = (word: string) => {
-    if (disabled || usedWords.includes(word)) return
-    let targetSlot = activeSlotId
-    if (!targetSlot || answers[targetSlot]) {
-      const firstEmpty = runtime.blanks.find((b, idx) => !answers[b.id] && !answers[String(idx + 1)])
-      targetSlot = firstEmpty ? firstEmpty.id : runtime.blanks[0]?.id ?? '1'
-    }
-    const nextAnswers = { ...answers, [targetSlot]: word }
-    onChange(nextAnswers)
-    const nextEmpty = runtime.blanks.find((b) => b.id !== targetSlot && !nextAnswers[b.id])
-    setActiveSlotId(nextEmpty ? nextEmpty.id : null)
+  const selectWord = (word: string, chipIndex?: number) => {
+    if (disabled) return
+    const updated = selectFillBlanksWord({ runtime, answers, activeSlotId, word, chipIndex })
+    if (!updated) return
+    onChange(updated.nextAnswers)
+    setActiveSlotId(updated.nextActiveSlotId)
   }
 
   const clearSlot = (slotKey: string) => {
     if (disabled) return
-    const nextAnswers = { ...answers }
-    delete nextAnswers[slotKey]
-    onChange(nextAnswers)
-    setActiveSlotId(slotKey)
+    const updated = clearFillBlanksSlot({ runtime, answers, slotKey })
+    onChange(updated.nextAnswers)
+    setActiveSlotId(updated.nextActiveSlotId)
   }
 
   const parts = runtime.textWithBlanks.split(/(\{\{\d+\}\})/)
@@ -10533,21 +12964,18 @@ function FillBlanksQuestion({
         <span style={{ width: '100%', fontSize: '0.84rem', fontWeight: 700, color: '#475569', marginBottom: '4px' }}>
           Banco de fichas (toca una palabra para insertarla en un espacio):
         </span>
-        {wordBank.map((word, idx) => {
-          const isUsed = usedWords.includes(word)
-          return (
-            <button
-              key={`${word}-${idx}`}
-              type="button"
-              disabled={disabled || isUsed}
-              className={`sorting-chip ${isUsed ? 'used-chip' : ''}`}
-              onClick={() => selectWord(word)}
-              title={isUsed ? 'Palabra ya colocada en un espacio' : 'Colocar en un espacio'}
-            >
-              {word}
-            </button>
-          )
-        })}
+        {chips.map((chip) => (
+          <button
+            key={`${chip.word}-${chip.chipIndex}`}
+            type="button"
+            disabled={disabled || chip.used}
+            className={`sorting-chip ${chip.used ? 'used-chip' : ''}`}
+            onClick={() => selectWord(chip.word, chip.chipIndex)}
+            title={chip.used ? 'Palabra ya colocada en un espacio' : 'Colocar en un espacio'}
+          >
+            {chip.word}
+          </button>
+        ))}
       </div>
 
       <div className="fill-blanks-paragraph">
@@ -10611,14 +13039,15 @@ function SpotErrorQuestion({
       </p>
       <div className="spot-error-list">
         {runtime.segments.map((seg, idx) => {
-          const isSelected = selectedValue === seg.id || selectedValue === seg.text
+          const segValue = selectSpotErrorSegment(seg)
+          const isSelected = selectedValue === segValue || selectedValue === seg.text
           return (
             <button
               key={seg.id || idx}
               type="button"
               disabled={disabled}
               className={`spot-error-segment ${isSelected ? 'chosen' : ''}`}
-              onClick={() => !disabled && onChange(seg.id || seg.text)}
+              onClick={() => !disabled && onChange(segValue)}
             >
               <span className="spot-error-badge">{String.fromCharCode(65 + idx)}</span>
               <span className="spot-error-text">{seg.text}</span>
@@ -10643,15 +13072,11 @@ function MarkWordsQuestion({
   onChange: (values: string[]) => void
 }) {
   const selectedWords = response.values || []
-  const parsed = parseMarkWordsText(runtime.text)
+  const segments = buildMarkWordsInteractiveSegments(runtime)
 
-  const toggleWord = (wordText: string) => {
+  const toggleWord = (tokenId: string) => {
     if (disabled) return
-    const isMarked = selectedWords.includes(wordText)
-    const next = isMarked
-      ? selectedWords.filter((w) => w !== wordText)
-      : [...selectedWords, wordText]
-    onChange(next)
+    onChange(toggleMarkWordToken(selectedWords, tokenId))
   }
 
   return (
@@ -10660,18 +13085,18 @@ function MarkWordsQuestion({
         Toca sobre los términos del párrafo para resaltarlos con tu dedo o cursor. Vuelve a tocarlos para desmarcarlos.
       </p>
       <div className="mark-words-paragraph">
-        {parsed.segments.map((segment, idx) => {
+        {segments.map((segment, idx) => {
           if (segment.kind === 'text') {
             return <span key={idx} className="mark-words-plain">{segment.text}</span>
           }
-          const isHighlighted = selectedWords.includes(segment.text)
+          const isHighlighted = selectedWords.includes(segment.tokenId)
           return (
             <button
-              key={`${segment.id}-${idx}`}
+              key={`${segment.tokenId}-${idx}`}
               type="button"
               disabled={disabled}
               className={`mark-word-token ${isHighlighted ? 'highlighted' : ''}`}
-              onClick={() => toggleWord(segment.text)}
+              onClick={() => toggleWord(segment.tokenId)}
               title={isHighlighted ? 'Toca para desmarcar' : 'Toca para resaltar'}
             >
               {segment.text}
@@ -10698,12 +13123,7 @@ function GridCheckQuestion({
 
   const toggleCell = (rowId: string, colId: string) => {
     if (disabled) return
-    const cellKey = `${rowId}:${colId}`
-    const exists = selectedCells.includes(cellKey)
-    const next = exists
-      ? selectedCells.filter((c) => c !== cellKey)
-      : [...selectedCells, cellKey]
-    onChange(next)
+    onChange(toggleGridCheckCell(selectedCells, rowId, colId))
   }
 
   return (
@@ -10819,10 +13239,10 @@ function ScenarioQuestion({
 
       <div className="scenario-stages-list">
         {runtime.stages.map((stage, sIndex) => {
-          const selectedText = response.choices[stage.id]
-          const selectedOption = stage.options.find((opt) => opt.text === selectedText)
+          const selectedValue = response.choices[stage.id]
+          const selectedOption = resolveSelectedScenarioOption(stage.options, selectedValue)
           return (
-            <div key={stage.id} className={`scenario-stage-card ${selectedText ? 'stage-answered' : ''}`}>
+            <div key={stage.id} className={`scenario-stage-card ${selectedValue ? 'stage-answered' : ''}`}>
               <div className="scenario-stage-header">
                 <span className="scenario-stage-badge">Etapa {sIndex + 1}</span>
                 <h4 className="scenario-stage-title">{stage.title}</h4>
@@ -10831,7 +13251,7 @@ function ScenarioQuestion({
 
               <div className="scenario-options-grid">
                 {stage.options.map((option) => {
-                  const isSelected = selectedText === option.text
+                  const isSelected = isScenarioOptionSelected(stage.options, selectedValue, option)
                   return (
                     <button
                       key={option.id}
@@ -10840,7 +13260,7 @@ function ScenarioQuestion({
                       className={`scenario-choice-card ${isSelected ? 'chosen' : ''}`}
                       onClick={() => {
                         if (!disabled) {
-                          onChange({ ...response.choices, [stage.id]: option.text })
+                          onChange(selectScenarioOption(response.choices, stage.id, option))
                         }
                       }}
                     >
@@ -10881,16 +13301,10 @@ function MatchingQuestion({ runtime, response, disabled, onChange }: { runtime: 
   }
   const selectRight = (rightText: string) => {
     if (disabled) return
-    const targetLeft = activeLeft ?? runtime.pairs.find((pair) => !response.pairs[pair.left])?.left ?? null
-    if (!targetLeft) return
-    const nextPairs = { ...response.pairs }
-    Object.keys(nextPairs).forEach((key) => {
-      if (nextPairs[key] === rightText && key !== targetLeft) delete nextPairs[key]
-    })
-    nextPairs[targetLeft] = rightText
-    onChange(nextPairs)
-    const nextUnlinked = runtime.pairs.find((pair) => pair.left !== targetLeft && !nextPairs[pair.left])?.left ?? null
-    setActiveLeft(nextUnlinked)
+    const result = selectMatchingRight(runtime.pairs, response.pairs, activeLeft, rightText)
+    if (!result) return
+    onChange(result.nextPairs)
+    setActiveLeft(result.nextActiveLeft)
   }
   const unlinkPair = (leftText: string) => {
     if (disabled) return
@@ -10968,7 +13382,7 @@ function SortingQuestion({ runtime, response, disabled, onChange }: { runtime: N
   const scrambledItems = scrambleSortingItems(runtime.items)
   const place = (itemId: string, category: string) => {
     if (disabled || !itemId) return
-    onChange({ ...response.assignments, [itemId]: category })
+    onChange(assignSortingCategory(response.assignments, itemId, category))
     setSelectedItemId(null)
   }
   const unplace = (itemId: string) => {
@@ -11051,13 +13465,9 @@ function OrderingQuestion({ runtime, response, disabled, onChange }: { runtime: 
   }, [response.order.length, runtime.steps, onChange])
 
   const move = (index: number, direction: -1 | 1) => {
-    const target = index + direction
-    if (target < 0 || target >= currentOrder.length || disabled) return
-    const order = [...currentOrder]
-    const tmp = order[index]
-    order[index] = order[target]
-    order[target] = tmp
-    onChange(order)
+    if (disabled) return
+    const nextOrder = moveOrderingStepInList(currentOrder, index, direction)
+    if (nextOrder) onChange(nextOrder)
   }
 
   const handleDragStart = (index: number) => {
@@ -11137,14 +13547,7 @@ function VennDiagramQuestion({
 
   const toggleZone = (itemId: string, targetZone: VennZone) => {
     if (disabled) return
-    const currentZone = assignments[itemId]
-    const nextAssignments = { ...assignments }
-    if (currentZone === targetZone) {
-      delete nextAssignments[itemId]
-    } else {
-      nextAssignments[itemId] = targetZone
-    }
-    onChange(nextAssignments)
+    onChange(toggleVennItemZone(assignments, itemId, targetZone))
   }
 
   const leftItems = items.filter((it) => assignments[it.id] === 'left')

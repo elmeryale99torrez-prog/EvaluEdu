@@ -40,10 +40,10 @@ Deno.serve(async (request) => {
     .eq('id', authData.user.id)
     .maybeSingle()
   if (profileError) return json({ error: profileError.message }, 500)
-  const isCallerAdmin = callerProfile?.role === 'admin' || (Array.isArray(callerProfile?.roles) && callerProfile.roles.includes('admin'))
+  const isCallerAdmin = callerProfile?.role === 'admin' || callerProfile?.role === 'superadmin' || (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('admin') || callerProfile.roles.includes('superadmin')))
   if (!isCallerAdmin) return json({ error: 'Solo un administrador de la institución puede crear accesos directos.' }, 403)
 
-  let body: { email?: unknown; displayName?: unknown; password?: unknown }
+  let body: { email?: unknown; displayName?: unknown; password?: unknown; institutionId?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -53,10 +53,40 @@ Deno.serve(async (request) => {
   const email = String(body.email ?? '').trim().toLowerCase()
   const displayName = String(body.displayName ?? '').trim()
   const password = String(body.password ?? '').trim()
+  const requestedInstId = typeof body.institutionId === 'string' && body.institutionId.trim() ? body.institutionId.trim() : null
 
   if (!email || !/^\S+@\S+\.\S+$/.test(email)) return json({ error: 'Escribe un correo electrónico válido.' }, 400)
   if (displayName.length < 2) return json({ error: 'Escribe el nombre del profesor (mínimo 2 letras).' }, 400)
   if (password.length < 8) return json({ error: 'La contraseña asignada debe tener al menos 8 caracteres.' }, 400)
+
+  // Verificar alcance institucional del actor
+  const isExplicitSuperadmin =
+    callerProfile?.role === 'superadmin' ||
+    callerProfile?.role === 'platform_admin' ||
+    (Array.isArray(callerProfile?.roles) && (callerProfile.roles.includes('superadmin') || callerProfile.roles.includes('platform_admin')))
+
+  let targetInstitutionId = requestedInstId
+  if (!isExplicitSuperadmin) {
+    const { data: callerMems, error: membershipScopeError } = await adminClient
+      .from('institution_memberships')
+      .select('institution_id, role, status')
+      .eq('user_id', authData.user.id)
+
+    const activeDirInsts = ((callerMems ?? []) as Array<Record<string, unknown>>)
+      .filter((m) => m.role === 'admin' && m.status === 'active')
+      .map((m) => String(m.institution_id))
+
+    if (membershipScopeError || activeDirInsts.length === 0) return json({ error: "No hay un ámbito institucional activo autorizado." }, 403)
+
+    if (activeDirInsts.length > 0) {
+      if (targetInstitutionId && !activeDirInsts.includes(targetInstitutionId)) {
+        return json({ error: 'No tienes permisos para crear docentes en una institución ajena.' }, 403)
+      }
+      if (!targetInstitutionId) {
+        targetInstitutionId = activeDirInsts[0]
+      }
+    }
+  }
 
   // Comprobar si el usuario ya existe en Supabase Auth
   const { data: userList, error: listError } = await adminClient.auth.admin.listUsers({ page: 1, perPage: 1000 })
@@ -64,30 +94,48 @@ Deno.serve(async (request) => {
 
   const existingUser = userList.users.find((u) => u.email?.toLowerCase() === email)
 
-  let userId: string
-  let mode: 'created' | 'activated' = 'created'
-
+  // Protección de cuentas existentes: prohibir sobreescritura de contraseñas y conversión forzosa de rol
   if (existingUser) {
-    userId = existingUser.id
-    mode = 'activated'
-    // Actualizar contraseña y desbanear si estaba bloqueado
-    const { error: updateError } = await adminClient.auth.admin.updateUserById(userId, {
-      password,
-      email_confirm: true,
-      ban_duration: 'none',
-      user_metadata: { ...(existingUser.user_metadata ?? {}), display_name: displayName },
+    return json({ error: 'Ya existe una cuenta de usuario registrada con este correo electrónico.' }, 409)
+  }
+
+  // Si aplica ámbito institucional, reservar plaza primero para no crear cuenta fantasma sin cupo
+  if (targetInstitutionId) {
+    const { data: quotaRes, error: quotaErr } = await callerClient.rpc('assign_institution_license', {
+      p_institution_id: targetInstitutionId,
+      p_email: email,
+      p_display_name: displayName,
+      p_role: 'teacher',
+      p_user_id: null,
     })
-    if (updateError) return json({ error: updateError.message }, 400)
-  } else {
-    // Crear nuevo usuario directo
-    const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { display_name: displayName },
+    if (quotaErr) {
+      return json({ error: quotaErr.message }, 403)
+    }
+    const qObj = quotaRes as Record<string, unknown> | null
+    if (qObj && qObj.ok === false) {
+      return json({ error: String(qObj.message ?? 'No hay cupos disponibles en la institución.'), code: qObj.error }, 409)
+    }
+  }
+
+  // Crear nuevo usuario directo docente
+  const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { display_name: displayName },
+  })
+  if (createError || !newUser.user) return json({ error: createError?.message ?? 'No se pudo crear la credencial docente.' }, 400)
+  const userId = newUser.user.id
+
+  // Confirmar membresía institucional como 'active' vinculada al userId creado
+  if (targetInstitutionId) {
+    await callerClient.rpc('assign_institution_license', {
+      p_institution_id: targetInstitutionId,
+      p_email: email,
+      p_display_name: displayName,
+      p_role: 'teacher',
+      p_user_id: userId,
     })
-    if (createError || !newUser.user) return json({ error: createError?.message ?? 'No se pudo crear la credencial docente.' }, 400)
-    userId = newUser.user.id
   }
 
   // Asegurar perfil docente en public.profiles
@@ -101,7 +149,7 @@ Deno.serve(async (request) => {
 
   if (profileUpsertError) {
     return json({
-      error: 'Se asignó la contraseña, pero ocurrió un detalle al vincular el perfil docente.',
+      error: 'Se creó la credencial, pero ocurrió un problema al registrar el perfil docente.',
       detail: profileUpsertError.message,
       userId,
       email,
@@ -109,28 +157,31 @@ Deno.serve(async (request) => {
   }
 
   // Registrar evento administrativo en el Libro Digital de Auditoría
-  await adminClient.from('audit_events').insert({
+  // RC-FIX-01 (LAB-RC-001): PostgrestBuilder no expone .catch(); se inspecciona el error devuelto.
+  const { error: auditError } = await adminClient.from('audit_events').insert({
     actor_id: authData.user.id,
-    event_type: mode === 'created' ? 'teacher_created' : 'teacher_credential_updated',
+    event_type: 'teacher_created',
     entity_type: 'user',
     entity_id: userId,
     metadata: {
-      action: mode === 'created' ? 'direct_credential_created' : 'direct_credential_updated',
       email,
-      displayName,
-      performedBy: callerProfile?.display_name ?? 'Dirección',
+      teacherName: displayName,
+      institution_id: targetInstitutionId,
+      createdDirectly: true,
       timestamp: new Date().toISOString(),
     },
-  }).catch(() => {})
+  })
+  if (auditError) console.warn('audit_events insert failed', auditError.message)
 
   return json({
     ok: true,
     userId,
     email,
     displayName,
-    mode,
-    message: mode === 'activated'
-      ? `Acceso reactivado con éxito para ${displayName}.`
-      : `Profesor ${displayName} dado de alta con credencial directa.`,
+    institutionId: targetInstitutionId,
+    status: 'active',
+    role: 'teacher',
+    mode: 'created',
+    message: `Cuenta docente creada exitosamente para ${displayName}.`,
   }, 201)
 })

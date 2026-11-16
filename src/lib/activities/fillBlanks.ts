@@ -173,25 +173,15 @@ export function parseTextWithBlanks(textWithBlanks: string): TextBlankSegment[] 
  * las respuestas correctas y los distractores para que nunca aparezcan en el orden de solución.
  */
 export function scrambleWordBank(correctAnswers: string[], distractors: string[]): string[] {
-  const cleanCorrect = correctAnswers.map((w) => w.trim()).filter(Boolean);
-  const cleanDistractors = distractors.map((w) => w.trim()).filter(Boolean);
+  const cleanCorrect = correctAnswers.map((w) => String(w ?? '').trim()).filter(Boolean);
+  const cleanDistractors = distractors.map((w) => String(w ?? '').trim()).filter(Boolean);
   const combined: string[] = [];
   const maxLen = Math.max(cleanCorrect.length, cleanDistractors.length);
   for (let i = 0; i < maxLen; i += 1) {
     if (i < cleanDistractors.length) combined.push(cleanDistractors[i]);
     if (i < cleanCorrect.length) combined.push(cleanCorrect[cleanCorrect.length - 1 - i]);
   }
-  // Evitar duplicados exactos si llegaran de datos antiguos
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const word of combined) {
-    const norm = normalizeForComparison(word);
-    if (!seen.has(norm)) {
-      seen.add(norm);
-      unique.push(word);
-    }
-  }
-  return unique;
+  return combined;
 }
 
 /** Valida que una definición de Completar Espacios esté lista para publicarse. */
@@ -428,25 +418,31 @@ export function validateFillBlanksResponse(
     return { ok: false, reason: 'Las asignaciones de espacios deben ser un objeto.' };
   }
 
-  const validBankSet = new Set<string>([
+  const validBankCounts = new Map<string, number>();
+  for (const rawWord of [
     ...definition.blanks.map((b) => b.answer.trim()),
     ...definition.distractors.map((d) => d.trim()),
-  ]);
+  ]) {
+    if (!rawWord) continue;
+    validBankCounts.set(rawWord, (validBankCounts.get(rawWord) ?? 0) + 1);
+  }
 
   const normalizedAnswers: Record<string, string> = {};
-  const usedWords = new Set<string>();
+  const usedCounts = new Map<string, number>();
 
   for (let index = 0; index < definition.blanks.length; index += 1) {
     const blank = definition.blanks[index];
     const word = resolveStudentBlankAnswer(definition, response.answers, blank, index);
     if (!word) continue;
-    if (!validBankSet.has(word)) {
+    const availableCount = validBankCounts.get(word) ?? 0;
+    if (availableCount === 0) {
       return { ok: false, reason: `La ficha "${word}" no pertenece al banco de palabras de la actividad.` };
     }
-    if (usedWords.has(word)) {
-      return { ok: false, reason: `La ficha "${word}" fue asignada a más de un espacio.` };
+    const nextCount = (usedCounts.get(word) ?? 0) + 1;
+    if (nextCount > availableCount) {
+      return { ok: false, reason: `La ficha "${word}" fue asignada más veces de las disponibles.` };
     }
-    usedWords.add(word);
+    usedCounts.set(word, nextCount);
     normalizedAnswers[blank.id] = word;
   }
 

@@ -1,0 +1,329 @@
+/* Candidato visual aislado sobre PR #5, 3b4f749. Sin integración ni publicación. */
+@media screen {
+/* Identidad global cobalto/ámbar. Los alias conservan los contratos del CSS
+   anterior; esta capa solo cambia materiales y color, nunca la geometría. */
+:root {
+  color-scheme: light;
+  --bg-app: #f3f5fa;
+  --paper: #ffffff;
+  --paper-subtle: #edf1f7;
+  --ink: #253047;
+  --ink-heading: #182238;
+  --muted: #536078;
+  --line: #ccd4e1;
+  --primary: #3456b2;
+  --primary-hover: #29458f;
+  --on-primary: #ffffff;
+  --primary-soft: #e5ebfa;
+  --primary-ring: #3456b238;
+  --accent: #94600b;
+  --accent-soft: #fff2d8;
+  --accent-edge: #d6992d;
+  --success: #246744;
+  --success-soft: #e8f3ec;
+  --danger: #a92d40;
+  --danger-soft: #fbecef;
+  --green: var(--primary);
+  --green-hover: var(--primary-hover);
+  --mint: var(--primary-soft);
+  --lavender: var(--primary-soft);
+  --peach: var(--accent-soft);
+  --accent-warm: var(--accent);
+  --accent-warm-hover: #764b06;
+  --accent-warm-subtle: var(--accent-soft);
+  --hero-bg: var(--paper-subtle);
+  --hero-text: var(--ink);
+  --glass: #ffffffd9;
+  --glass-chrome: #ffffffc7;
+  --glass-edge: #ffffffed;
+  --ambient-blue: #557fdb20;
+  --ambient-amber: #e6b65316;
+  --shadow-card: 0 7px 24px -10px #253b642b, inset 0 1px 0 var(--glass-edge);
+  --shadow-modal: 0 24px 64px #18223838, inset 0 1px 0 var(--glass-edge);
+  --shadow-action: 0 4px 12px #3456b224;
+  --overlay: #17223870;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #111315;
+  --paper: #1d2024;
+  --paper-subtle: #25292f;
+  --ink: #e5e8ee;
+  --ink-heading: #f5f6f9;
+  --muted: #acb5c4;
+  --line: #424852;
+  --primary: #a5b9f3;
+  --primary-hover: #bed0ff;
+  --on-primary: #172343;
+  --primary-soft: #293247;
+  --primary-ring: #a5b9f340;
+  --accent: #e5bb70;
+  --accent-soft: #353025;
+  --accent-edge: #d9a84d;
+  --success: #9dd1b1;
+  --success-soft: #24342b;
+  --danger: #f4a5b2;
+  --danger-soft: #3c252c;
+  --accent-warm-hover: #f3cf91;
+  --glass: #1d2024ed;
+  --glass-chrome: #1b1e22e8;
+  --glass-edge: #ffffff12;
+  --ambient-blue: #7795d408;
+  --ambient-amber: #d5ab5c05;
+  --shadow-card: 0 8px 26px -12px #00000085, inset 0 1px 0 var(--glass-edge);
+  --shadow-modal: 0 24px 64px #00000080, inset 0 1px 0 var(--glass-edge);
+  --shadow-action: 0 3px 10px #00000030;
+  --overlay: #080a0d9c;
+}
+
+/* Adaptación institucional de PR #5: la antigua banda oscura no puede
+   conservar texto claro cuando la superficie cambia al tema de día. */
+#root .admin-scope-banner small { color: var(--muted) !important; }
+#root .admin-scope-banner h3 { color: var(--ink-heading) !important; }
+#root .license-hero-card {
+  background: var(--paper) !important;
+  color: var(--ink) !important;
+  border-color: var(--line) !important;
+  box-shadow: var(--shadow-card) !important;
+}
+#root :is(.license-hero-header p, .license-hero-footer small, .license-compact-meta) { color: var(--muted) !important; }
+#root :is(.license-hero-header h2, .license-meter-labels b, .license-meter-labels span, .license-compact-title) { color: var(--ink) !important; }
+#root :is(.license-badge, .license-compact-status.available) { background: var(--primary-soft) !important; color: var(--primary) !important; }
+#root :is(.license-badge.warning, .license-compact-status.exhausted) { background: var(--accent-soft) !important; color: var(--accent) !important; }
+#root .license-hero-footer { border-color: var(--line) !important; }
+#root .license-track { background: var(--paper-subtle) !important; }
+
+/* El puente con #root supera las correcciones !important heredadas.
+   Impresión mantiene sus reglas originales, sin fondos ni filtros nuevos. */
+@media screen {
+  #root { color: var(--ink); }
+  #root :is(.app-shell, .role-landing, .auth-shell) {
+    background: radial-gradient(ellipse at 15% 20%, var(--ambient-blue), transparent 58%),
+      radial-gradient(ellipse at 95% 8%, var(--ambient-amber), transparent 46%), var(--bg-app) !important;
+    color: var(--ink) !important;
+  }
+  #root :is(.topbar, .sidebar, .panel, .metric-card, .activity-card, .room-card,
+    .role-card, .auth-card, .entry-card, .modal-card, .proposal-group-card,
+    .content-picker-card, .room-result-card, .format-catalog-card, .proposal-bottom-bar,
+    .panel-window-menu > div, .account-menu > div) {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+    box-shadow: var(--shadow-card) !important;
+  }
+  #root :is(.topbar, .sidebar) { box-shadow: inset 0 1px 0 var(--glass-edge) !important; }
+  #root .modal-card { box-shadow: var(--shadow-modal) !important; }
+  #root .modal-backdrop { background: var(--overlay) !important; }
+
+  /* Las zonas de lectura y los campos conservan superficies opacas. */
+  #root :is(.play-card, .activity-list, .activity-list-row, .template-card,
+    .template-empty, .repeatable-card, .picker-type, .editor-card, .editor-option,
+    .activity-check, .activity-check-card, .variant-item-card, .permission-card,
+    .results-summary, .matching-column, .scenario-stage-card, .fill-blanks-paragraph,
+    .mark-words-paragraph, .venn-concept-card, .exam-preview-frame-wrap) {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+  }
+  #root :is(.template-section, .template-block, .compatibility-preview, .picker-card,
+    .editor-section, .category-editor, .activity-selection, .template-progress,
+    .preview-hero, .activity-check-topic, .room-result-metrics, .room-results-backbar,
+    .variant-modal-toolbar, .variant-prompt, .format-desc-block, .help-card,
+    .friendly-tip-bubble, .structured-row, .ordering-item, .sorting-chip, .sorting-drop,
+    .matching-card, .scenario-situation-box, .scenario-progress-bar, .scenario-choice-card,
+    .fill-blanks-bank, .fill-blank-slot, .spot-error-segment, .grid-check-cell-btn,
+    .grid-check-chip-btn, .venn-zone-card, .venn-btn-choice, .short-answer-tolerances,
+    .room-activities span, .event-strip span, .panel-menu-current, .icon-button,
+    .role-switcher, .format-catalog-card.upcoming, .finish-pending-btn) {
+    background: var(--paper-subtle) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+  }
+  #root :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, select,
+    .short-answer-input, .import-prompt-readonly) {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+  }
+  #root :is(input, textarea)::placeholder { color: var(--muted); opacity: 1; }
+  #root :is(input[type="checkbox"], input[type="radio"], input[type="range"]) { accent-color: var(--primary); }
+  #root :is(h1, h2, h3, .role-card-copy b, .metric-card strong, .metric-card b,
+    .results-summary strong, .room-code b, .list-copy b, .block-heading > b,
+    .editor-heading b, .editor-card-head b, .scenario-stage-title, .friendly-tip-title,
+    .friendly-tip-text, .preview-item b, .activity-check b) {
+    color: var(--ink-heading) !important;
+    text-shadow: none !important;
+  }
+  #root :is(.muted, .eyebrow, .brand small, .connection-pill, .role-label small,
+    .page-intro > div > p:last-child, .metric-card small, .metric-icon,
+    .activity-type small, .activity-card > p, .card-footer, .list-copy small,
+    .template-description, .template-card-head p:not(.eyebrow), .modal-subtitle,
+    .editor-help, .editor-step-hint, .backup-note, .autosave-status,
+    .preview-item span, .preview-item small, .preview-list, .preview-hero > p,
+    .play-top, .play-top span, .scenario-stage-prompt, .play-prompt,
+    .help-card p, .sidebar-footer > small, .activity-check small,
+    .room-card-meta, .room-instructions, .student-entry > p:not(.eyebrow),
+    .student-footer, .entry-card > small, .results-summary span) {
+    color: var(--muted) !important;
+  }
+  #root :is(.text-button, .role-card-arrow, .card-arrow, .matching-col-title,
+    .sorting-drop > b, .scenario-progress-bar b, .format-catalog-icon,
+    .friendly-eyebrow, .help-card .help-icon, .room-result-template-badge) { color: var(--primary) !important; }
+  #root :is(.role-icon, .avatar, .metric-card-top .metric-icon, .metric-icon,
+    .student-orb, .completion-orb, .role-card-icon, .format-catalog-icon,
+    .step-number, .ordering-badge, .template-stats span, .preview-tags span,
+    .selection-count, .picker-format-chip, .scope-tag, .simulator-badge) {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    border-color: var(--line) !important;
+  }
+  #root :is(.primary-button, .install-button, .voucher-download-btn, .sync-button) {
+    background: var(--primary) !important;
+    color: var(--on-primary) !important;
+    border-color: transparent !important;
+    box-shadow: var(--shadow-action) !important;
+  }
+  #root :is(.primary-button, .install-button, .voucher-download-btn, .sync-button):hover:not(:disabled) {
+    background: var(--primary-hover) !important;
+    color: var(--on-primary) !important;
+    box-shadow: var(--shadow-action) !important;
+  }
+  #root .primary-button:disabled { box-shadow: none !important; }
+  #root :is(.outline-button, .session-button, .theme-toggle-btn, .step-arrow-btn,
+    .ordering-controls button, .mobile-nav-toggle, .scope-switch-btn) {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+    box-shadow: none !important;
+  }
+  #root :is(.outline-button, .session-button, .theme-toggle-btn, .step-arrow-btn,
+    .ordering-controls button, .mobile-nav-toggle, .scope-switch-btn):hover:not(:disabled) {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    border-color: var(--primary) !important;
+  }
+  #root .nav-button { color: var(--muted) !important; }
+  #root .nav-button.active {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    border-left-color: var(--accent-edge) !important;
+    box-shadow: inset 3px 0 0 var(--accent-edge) !important;
+  }
+  #root :is(.nav-button.active svg, .friendly-quote-open, .friendly-quote-close) { color: var(--accent) !important; }
+  #root .role-switch-link.student-mode-link { background: var(--primary-soft) !important; color: var(--primary) !important; border-color: var(--line) !important; }
+  #root :is(.nav-button em, .bottom-count-badge) { background: var(--accent-soft) !important; color: var(--accent) !important; }
+  #root :is(.tabs button.active, .admin-filter-tab.active, .access-mode-btn.active,
+    .activity-check.selected, .activity-check-card.selected, .variant-item-card.selected,
+    .proposal-group-card.has-selected, .proposal-selection-pill.active,
+    .answer-option.chosen, .matching-card.active, .matching-card.ready-to-link,
+    .sorting-chip.active-chip, .sorting-drop.ready-drop, .scenario-choice-card.chosen,
+    .fill-blank-slot.ready-slot, .fill-blank-slot.filled, .spot-error-segment.chosen,
+    .mark-word-token.highlighted, .grid-check-cell-btn.checked, .grid-check-chip-btn.active,
+    .stepper-node.active, .stepper-node.done.active) {
+    background: var(--primary-soft) !important;
+    color: var(--primary) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 2px var(--primary-ring) !important;
+  }
+  #root :is(.answer-option, .matching-card, .sorting-chip, .scenario-choice-card,
+    .fill-blank-slot, .spot-error-segment):hover:not(:disabled) { border-color: var(--primary) !important; }
+  #root :is(.answer-option, .option-mark, .mark-word-token) { color: var(--ink) !important; }
+  #root .answer-option { background: var(--paper-subtle) !important; border-color: var(--line) !important; }
+  #root .answer-option.chosen { background: var(--primary-soft) !important; border-color: var(--primary) !important; }
+  #root :is(.progress-track span, .license-fill) { background: var(--primary) !important; }
+  #root :is(.template-progress-head strong, .template-progress-head b) { color: var(--primary) !important; }
+  #root :is(.template-progress-head small, .backup-actions small, .field-hint) { color: var(--muted) !important; }
+  #root .progress-checks span { background: var(--paper) !important; color: var(--muted) !important; }
+  #root .progress-checks span.done { background: var(--primary-soft) !important; color: var(--primary) !important; }
+  #root .modal-card label { color: var(--ink) !important; }
+  #root :is(.progress-track, .completion-line) { background: var(--paper-subtle) !important; }
+  #root :is(.friendly-tip-panel, .tip-panel) { background: var(--paper) !important; border-color: var(--line) !important; }
+  #root .friendly-tip-panel::before { background: none !important; }
+  #root :is(.friendly-tip-spark-anim, .brand-mark.mascot-mark) {
+    background: var(--primary-soft) !important;
+    border-color: var(--line) !important;
+    box-shadow: none !important;
+  }
+  #root :is(.friendly-tip-bubble, .friendly-tip-panel) { box-shadow: var(--shadow-card) !important; }
+  #root :is(.results-summary div strong, .metric-card strong) { color: var(--ink-heading) !important; text-shadow: none !important; }
+  #root :is(.activity-list-row:hover, .results-panel tbody tr:hover,
+    .results-panel tbody tr.selected-result, .panel-window-menu a:hover,
+    .panel-menu-btn:hover, .account-menu button:hover, .picker-type:hover) {
+    background: var(--primary-soft) !important;
+    color: var(--ink) !important;
+  }
+  #root :is(.form-note, .progress-note, .generated-note, .privacy-note,
+    .review-banner, .room-rules, .waiting-code, .waiting-state,
+    .student-tester-notice, .completion-voucher-box, .admin-scope-banner) {
+    background: var(--paper-subtle) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+  }
+  #root :is(.compatibility-item, .compatibility-item > span) { background: var(--paper-subtle) !important; color: var(--muted) !important; }
+  #root :is(.compatibility-item b, .compatibility-item small) { color: var(--muted) !important; }
+  #root .compatibility-item { min-width: 0; grid-template-columns: 22px minmax(0, 1fr); }
+  #root :is(.compatibility-item b, .compatibility-item small) { overflow-wrap: anywhere; }
+  #root :is(.compatibility-item.available.active, .tag.published, .generated-note,
+    .feedback-box, .matching-card.linked, .scenario-stage-card.stage-answered) {
+    background: var(--success-soft) !important;
+    color: var(--success) !important;
+    border-color: var(--success) !important;
+  }
+  #root :is(.feedback-box b, .feedback-box p, .compatibility-item.available.active b) { color: var(--success) !important; }
+  #root :is(.tag.draft, .tag.pending, .repair-banner-notice, .repair-chip-warning,
+    .finish-pending-section, .play-timer.timer-warning) {
+    background: var(--accent-soft) !important;
+    color: var(--accent) !important;
+    border-color: var(--accent-edge) !important;
+  }
+  #root :is(.finish-pending-title, .finish-pending-btn small) { color: var(--accent) !important; }
+  #root :is(.form-error, .auth-message.error, .play-timer.timer-danger) {
+    background: var(--danger-soft) !important;
+    color: var(--danger) !important;
+    border-color: var(--danger) !important;
+  }
+  #root .admin-notice { background: var(--accent-soft) !important; color: var(--accent) !important; border-color: var(--line) !important; }
+  #root :is(.admin-notice b, .admin-notice > span) { color: var(--accent) !important; }
+  #root .admin-notice > span { background: var(--paper) !important; }
+  #root .admin-notice p { color: var(--muted) !important; }
+  #root .toast { background: var(--ink-heading) !important; color: var(--paper) !important; }
+  #root :is(button, a, input, textarea, select, summary):focus-visible {
+    outline: 2px solid var(--primary) !important;
+    outline-offset: 3px;
+  }
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    #root :is(.topbar, .sidebar, .proposal-bottom-bar) {
+      background: var(--glass-chrome) !important;
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+    }
+    #root :is(.panel, .metric-card, .activity-card, .room-card, .role-card,
+      .auth-card, .entry-card, .modal-card, .proposal-group-card, .room-result-card) {
+      background: var(--glass) !important;
+      -webkit-backdrop-filter: blur(12px);
+      backdrop-filter: blur(12px);
+    }
+  }
+  @media (max-width: 720px), (prefers-reduced-transparency: reduce) {
+    #root :is(.topbar, .sidebar, .proposal-bottom-bar, .panel, .metric-card,
+      .activity-card, .room-card, .role-card, .auth-card, .entry-card,
+      .modal-card, .proposal-group-card, .room-result-card) {
+      background: var(--paper) !important;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+  @media (max-width: 720px) {
+    #root .json-import-modal :is(.import-action-bar, .modal-actions) { flex-wrap: wrap; }
+    #root .json-import-modal :is(.import-action-bar, .modal-actions) button {
+      flex: 1 1 100%;
+      min-width: 0;
+      max-width: 100%;
+      white-space: normal !important;
+      line-height: 1.35 !important;
+    }
+  }
+}
+
+}
