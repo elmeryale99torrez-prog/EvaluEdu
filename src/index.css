@@ -1782,15 +1782,15 @@ button{cursor:pointer;border:0;color:inherit}
 
 /* Marca con Mascota en Header y Landing */
 .brand-mark.mascot-mark {
-  background: linear-gradient(135deg, #175446 0%, #0c2d25 100%) !important;
+  background: linear-gradient(135deg, #31489a 0%, #18265f 100%) !important;
   border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  box-shadow: 0 4px 12px rgba(18, 56, 46, 0.16) !important;
+  box-shadow: 0 5px 16px rgba(31, 49, 118, 0.24), inset 0 1px 0 rgba(255,255,255,.18) !important;
   padding: 2px !important;
   display: grid !important;
   place-items: center !important;
 }
 [data-theme="dark"] .brand-mark.mascot-mark {
-  background: linear-gradient(135deg, #16362d 0%, #0c1c17 100%) !important;
+  background: linear-gradient(135deg, #283b83 0%, #111a42 100%) !important;
   border-color: rgba(248, 164, 82, 0.3) !important;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4) !important;
 }

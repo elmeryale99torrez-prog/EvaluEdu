@@ -207,6 +207,7 @@ export function IconSparkMascot({ size = 32, className = '', ...props }: IconPro
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" fill="none" className={className} {...props}>
       <defs>
+        <filter id="icoSparkShadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="3" stdDeviation="2.8" floodColor="#101b45" floodOpacity="0.28" /></filter>
         <linearGradient id="icoSparkGrad" x1="20%" y1="10%" x2="70%" y2="90%">
           <stop offset="0%" stopColor="#ffe699" />
           <stop offset="30%" stopColor="#f8a452" />
@@ -219,12 +220,12 @@ export function IconSparkMascot({ size = 32, className = '', ...props }: IconPro
         </linearGradient>
       </defs>
       {/* Chispa de destello flotante */}
-      <path d="M74 22 Q75 19 77 19 Q75 19 74 16 Q73 19 71 19 Q73 19 74 22Z" fill="#ffe29a" />
+      <path d="M74 22 Q75 19 77 19 Q75 19 74 16 Q73 19 71 19 Q73 19 74 22Z" fill="#ffd36a" />
       <circle cx="76" cy="38" r="1.5" fill="#ffd17a" />
       {/* Cuerpo de la llama */}
       <path
         d="M50 84 C34 84 24 70 27 54 C29 43 36 36 45 28 C49 24 54 17 59 15 C60.5 14.5 62 16 61 18.5 C57.5 27 61 33 68 43 C76 55 75 70 68 78 C63 83.5 56.5 84 50 84 Z"
-        fill="url(#icoSparkGrad)"
+        fill="url(#icoSparkGrad)" filter="url(#icoSparkShadow)"
       />
       {/* Vientre suave */}
       <path

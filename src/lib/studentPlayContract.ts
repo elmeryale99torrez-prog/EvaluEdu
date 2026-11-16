@@ -35,11 +35,13 @@ export function getSimpleChoiceDisplayOptions(
 
 export function selectSimpleChoiceResponse(
   type: Activity['type'],
-  optionValue: string
+  optionValue: string,
+  currentValue = ''
 ): Extract<ActivityResponse, { type: 'trueFalse' | 'singleChoice' }> {
+  const nextValue = currentValue === optionValue ? '' : optionValue
   return type === 'trueFalse'
-    ? { type: 'trueFalse', value: optionValue }
-    : { type: 'singleChoice', value: optionValue }
+    ? { type: 'trueFalse', value: nextValue }
+    : { type: 'singleChoice', value: nextValue }
 }
 
 export function getMultiSelectOptionId(option: { id?: string; label?: string }): string {
@@ -226,8 +228,9 @@ export function clearFillBlanksSlot(params: {
   }
 }
 
-export function selectSpotErrorSegment(segment: { id?: string; text?: string }): string {
-  return segment.id || segment.text || ''
+export function selectSpotErrorSegment(segment: { id?: string; text?: string }, currentValue = ''): string {
+  const value = segment.id || segment.text || ''
+  return value === currentValue ? '' : value
 }
 
 export function toggleGridCheckCell(
@@ -246,9 +249,15 @@ export function selectScenarioOption(
   stageId: string,
   option: { id?: string; text?: string }
 ): Record<string, string> {
+  const value = option.id || option.text || ''
+  if (choices[stageId] === value) {
+    const next = { ...choices }
+    delete next[stageId]
+    return next
+  }
   return {
     ...choices,
-    [stageId]: option.id || option.text || '',
+    [stageId]: value,
   }
 }
 

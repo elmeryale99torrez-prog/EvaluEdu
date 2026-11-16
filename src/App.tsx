@@ -12476,7 +12476,11 @@ function PlayView({
   const runtime = activityRuntime(item)
   const canSubmit = isResponseComplete(item, draftResponse)
   const changeSimple = (value: string) =>
-    setDraftResponse(selectSimpleChoiceResponse(item.type, value))
+    setDraftResponse(selectSimpleChoiceResponse(
+      item.type,
+      value,
+      draftResponse.type === 'trueFalse' || draftResponse.type === 'singleChoice' ? draftResponse.value : '',
+    ))
 
   const answeredCount = Object.keys(responsesRecorded ?? {}).length
   const isLastQuestion = index + 1 >= totalCount
@@ -13041,7 +13045,7 @@ function SpotErrorQuestion({
               type="button"
               disabled={disabled}
               className={`spot-error-segment ${isSelected ? 'chosen' : ''}`}
-              onClick={() => !disabled && onChange(segValue)}
+              onClick={() => !disabled && onChange(selectSpotErrorSegment(seg, selectedValue))}
             >
               <span className="spot-error-badge">{String.fromCharCode(65 + idx)}</span>
               <span className="spot-error-text">{seg.text}</span>
