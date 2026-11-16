@@ -3764,6 +3764,8 @@ html,body{max-width:100%;overflow-x:hidden}
   .format-student-demo { padding: 10px; }
   .format-student-demo .play-card { padding: 14px; }
   .format-demo-heading .simulator-badge { white-space: normal; }
+  .student-activity-demo .play-actions-right { width: 100%; flex-direction: column; align-items: stretch; }
+  .student-activity-demo .play-actions-right button { width: 100%; flex: none; }
   .demo-actions button { width: 100%; }
 }
 
