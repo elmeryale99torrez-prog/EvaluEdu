@@ -3737,8 +3737,34 @@ html,body{max-width:100%;overflow-x:hidden}
 }
 
 /* Modal de Descripción Pedagógica */
-.format-desc-modal {
-  max-width: 580px;
+.modal-card.format-desc-modal {
+  width: min(860px, calc(100vw - 32px));
+  max-width: 860px;
+}
+
+.format-student-demo {
+  margin-top: 16px;
+  padding: clamp(10px, 2vw, 18px);
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  color: var(--ink);
+}
+.format-demo-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.format-demo-note { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.student-activity-demo { margin-top: 14px; min-width: 0; }
+.student-activity-demo .play-card { width: 100%; min-width: 0; }
+.student-activity-demo .play-top { flex-wrap: wrap; gap: 8px; }
+.student-activity-demo .play-actions-right { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.student-activity-demo button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.student-activity-demo .play-card h1 { overflow-wrap: anywhere; }
+.demo-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; margin-top: 14px; gap: 8px; }
+@media (max-width: 480px) {
+  .format-student-demo { padding: 10px; }
+  .format-student-demo .play-card { padding: 14px; }
+  .format-demo-heading .simulator-badge { white-space: normal; }
+  .demo-actions button { width: 100%; }
 }
 
 .format-modal-eyebrow-wrap {
