@@ -148,7 +148,8 @@ CREATE TABLE public.room_participants (
   guest_token_expires_at timestamptz,
   joined_at timestamptz NOT NULL DEFAULT now(),
   last_seen_at timestamptz NOT NULL DEFAULT now(),
-  status text NOT NULL DEFAULT 'active'
+  status text NOT NULL DEFAULT 'joined',
+  CONSTRAINT room_participants_status_check CHECK (status IN ('joined', 'in_progress', 'completed', 'abandoned'))
 );
 
 CREATE TABLE public.attempts (

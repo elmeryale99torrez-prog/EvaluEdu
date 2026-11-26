@@ -301,7 +301,7 @@ Deno.serve(async (request) => {
           .from('room_participants')
           .update({
             last_seen_at: new Date().toISOString(),
-            status: existingAuth.status === 'abandoned' ? 'active' : existingAuth.status,
+            status: existingAuth.status === 'abandoned' ? (room.status === 'active' ? 'in_progress' : 'joined') : existingAuth.status,
           })
           .eq('id', existingAuth.id)
           .select(participantPublicFields)
@@ -401,7 +401,7 @@ Deno.serve(async (request) => {
         name_normalized: normalized,
         guest_token_hash: tokenHash,
         guest_token_expires_at: expiresAt,
-        status: 'active',
+        status: room.status === 'active' ? 'in_progress' : 'joined',
       })
       .select(participantPrivateFields)
       .single()

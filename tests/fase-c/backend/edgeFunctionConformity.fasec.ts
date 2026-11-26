@@ -46,6 +46,8 @@ import { checkRateLimit, resetRateLimitStore } from '../../../supabase/functions
 import {
   loadPhaseCEdgeFunctions,
   createMockDbStore,
+  buildMockSupabaseClient,
+  VALID_ROOM_PARTICIPANT_STATUSES,
   setActiveMockDbStore,
   installNetworkGuard,
   restoreNetworkGuard,
@@ -601,7 +603,7 @@ describe('Fase C · Suite Integral de Conformidad del Servidor (LAB-C-001)', () 
       mockStore.profiles.set(adminUser.id, {
         id: adminUser.id,
         role: 'admin',
-        roles: ['admin'],
+        roles: ['admin', 'superadmin'],
         display_name: 'Director Admin',
       })
 
@@ -637,7 +639,7 @@ describe('Fase C · Suite Integral de Conformidad del Servidor (LAB-C-001)', () 
       mockStore.profiles.set(adminUser.id, {
         id: adminUser.id,
         role: 'admin',
-        roles: ['admin'],
+        roles: ['admin', 'superadmin'],
         display_name: 'Director Admin',
       })
 
@@ -2096,7 +2098,7 @@ describe('Fase C · Suite Integral de Conformidad del Servidor (LAB-C-001)', () 
         name_normalized: 'alumno heredado',
         guest_token_hash: legacyHash,
         guest_token_expires_at: new Date(Date.now() + 3600_000).toISOString(),
-        status: 'active',
+        status: 'in_progress',
         activities_snapshot: null,
       })
 
@@ -2942,6 +2944,135 @@ describe('Fase C · Suite Integral de Conformidad del Servidor (LAB-C-001)', () 
       expect(getFillBlanksBankChips(singleCopyFb, scStep3.nextAnswers).filter((c) => !c.used).map((c) => c.word)).toEqual(
         expect.arrayContaining(['glucosa', 'calcio'])
       )
+    })
+
+    it('room_participants_status_check: student-room-guest asigna in_progress/joined según room.status, recupera abandoned sin usar active, preserva estados válidos y el adaptador rechaza estados inválidos', async () => {
+      expect(Array.from(VALID_ROOM_PARTICIPANT_STATUSES)).toEqual(['joined', 'in_progress', 'completed', 'abandoned'])
+
+      const act = activitiesFixtures.trueFalse.activity
+      mockStore.activities.set(act.id, act)
+
+      // 1. Join en sala 'active' -> inserta participant.status === 'in_progress'
+      const activeRoomId = crypto.randomUUID()
+      mockStore.rooms.set(activeRoomId, { id: activeRoomId, code: 'STACT01', status: 'active', score_per_question: 10 })
+      mockStore.roomActivities.set(activeRoomId, [{ id: 'occ-st-1', room_id: activeRoomId, activity_id: act.id, position: 1 }])
+
+      const joinActiveRes = await guestHandler(
+        new Request('http://localhost/student-room-guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'join', code: 'STACT01', displayName: 'Alumno Sala Activa' }),
+        })
+      )
+      expect(joinActiveRes.status).toBe(201)
+      const joinActiveBody = await joinActiveRes.json()
+      expect(joinActiveBody.participant.status).toBe('in_progress')
+      expect(mockStore.participants.get(joinActiveBody.participantId).status).toBe('in_progress')
+
+      // 2. Join en sala 'waiting' -> inserta participant.status === 'joined'
+      const waitingRoomId = crypto.randomUUID()
+      mockStore.rooms.set(waitingRoomId, { id: waitingRoomId, code: 'STWAIT01', status: 'waiting', score_per_question: 10 })
+      mockStore.roomActivities.set(waitingRoomId, [{ id: 'occ-st-2', room_id: waitingRoomId, activity_id: act.id, position: 1 }])
+
+      const joinWaitingRes = await guestHandler(
+        new Request('http://localhost/student-room-guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'join', code: 'STWAIT01', displayName: 'Alumno Sala Espera' }),
+        })
+      )
+      expect(joinWaitingRes.status).toBe(201)
+      const joinWaitingBody = await joinWaitingRes.json()
+      expect(joinWaitingBody.participant.status).toBe('joined')
+      expect(mockStore.participants.get(joinWaitingBody.participantId).status).toBe('joined')
+
+      // 3. Recuperación de participante 'abandoned' en sala 'active' -> pasa a 'in_progress'
+      mockStore.participants.get(joinActiveBody.participantId).status = 'abandoned'
+      const recoverActiveRes = await guestHandler(
+        new Request('http://localhost/student-room-guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'join',
+            code: 'STACT01',
+            displayName: 'Alumno Sala Activa',
+            participantId: joinActiveBody.participantId,
+            guestToken: joinActiveBody.guestToken,
+          }),
+        })
+      )
+      expect(recoverActiveRes.status).toBe(200)
+      const recoverActiveBody = await recoverActiveRes.json()
+      expect(recoverActiveBody.recovered).toBe(true)
+      expect(recoverActiveBody.participant.status).toBe('in_progress')
+      expect(mockStore.participants.get(joinActiveBody.participantId).status).toBe('in_progress')
+
+      // 4. Recuperación de participante 'abandoned' en sala 'waiting' -> pasa a 'joined'
+      mockStore.participants.get(joinWaitingBody.participantId).status = 'abandoned'
+      const recoverWaitingRes = await guestHandler(
+        new Request('http://localhost/student-room-guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'join',
+            code: 'STWAIT01',
+            displayName: 'Alumno Sala Espera',
+            participantId: joinWaitingBody.participantId,
+            guestToken: joinWaitingBody.guestToken,
+          }),
+        })
+      )
+      expect(recoverWaitingRes.status).toBe(200)
+      const recoverWaitingBody = await recoverWaitingRes.json()
+      expect(recoverWaitingBody.recovered).toBe(true)
+      expect(recoverWaitingBody.participant.status).toBe('joined')
+      expect(mockStore.participants.get(joinWaitingBody.participantId).status).toBe('joined')
+
+      // 5. Recuperación de participante con estado válido no-'abandoned' ('joined' aunque la sala pase a 'active') -> preserva existingAuth.status ('joined')
+      mockStore.rooms.set(waitingRoomId, { ...mockStore.rooms.get(waitingRoomId), status: 'active' })
+      const preserveJoinedRes = await guestHandler(
+        new Request('http://localhost/student-room-guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'join',
+            code: 'STWAIT01',
+            displayName: 'Alumno Sala Espera',
+            participantId: joinWaitingBody.participantId,
+            guestToken: joinWaitingBody.guestToken,
+          }),
+        })
+      )
+      expect(preserveJoinedRes.status).toBe(200)
+      const preserveJoinedBody = await preserveJoinedRes.json()
+      expect(preserveJoinedBody.participant.status).toBe('joined')
+
+      // 6. El adaptador rechaza insert y update con status inválido ('active') con error 23514 room_participants_status_check
+      const client = buildMockSupabaseClient(mockStore)
+      const badInsert = await client
+        .from('room_participants')
+        .insert({
+          room_id: activeRoomId,
+          display_name: 'Invalido',
+          name_normalized: 'invalido',
+          status: 'active',
+        })
+        .select()
+        .single()
+      expect(badInsert.data).toBeNull()
+      expect(badInsert.error?.code).toBe('23514')
+      expect(badInsert.error?.message).toContain('room_participants_status_check')
+
+      const badUpdate = await client
+        .from('room_participants')
+        .update({ status: 'active' })
+        .eq('id', joinActiveBody.participantId)
+        .select()
+        .maybeSingle()
+      expect(badUpdate.data).toBeNull()
+      expect(badUpdate.error?.code).toBe('23514')
+      expect(badUpdate.error?.message).toContain('room_participants_status_check')
+      expect(mockStore.participants.get(joinActiveBody.participantId).status).toBe('in_progress')
     })
   })
 })

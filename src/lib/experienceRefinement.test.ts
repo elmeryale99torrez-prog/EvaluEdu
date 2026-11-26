@@ -240,4 +240,141 @@ describe('Refinamiento de Experiencia y Consolidación de 13 Actividades (v1.3)'
     const badEval = evaluateActivityResponse(activity, badResp, 10)
     expect(badEval.correct).toBe(false)
   })
+
+  it('cumple room_participants_status_check (joined, in_progress, completed, abandoned) en student-room-guest, schema_representativo.sql y edgeFunctionAdapter', async () => {
+    const fsModuleName = 'node:fs'
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModuleName)) as {
+      readFileSync: (path: URL, encoding: string) => string
+    }
+
+    const guestSource = readFileSync(
+      new URL('../../supabase/functions/student-room-guest/index.ts', import.meta.url),
+      'utf8'
+    )
+    const schemaSource = readFileSync(
+      new URL('../../tests/integracion/env/schema_representativo.sql', import.meta.url),
+      'utf8'
+    )
+    const rolloutSource = readFileSync(
+      new URL('../../tests/integracion/sql/verify_rollout_and_rollback.mjs', import.meta.url),
+      'utf8'
+    )
+
+    // 1. student-room-guest nunca asigna 'active' a room_participants.status; usa 'in_progress' | 'joined'
+    expect(guestSource).toContain(
+      "status: existingAuth.status === 'abandoned' ? (room.status === 'active' ? 'in_progress' : 'joined') : existingAuth.status"
+    )
+    expect(guestSource).toContain("status: room.status === 'active' ? 'in_progress' : 'joined'")
+    expect(guestSource).not.toMatch(/status:\s*'active'/)
+    expect(guestSource).not.toMatch(/existingAuth\.status\s*===\s*'abandoned'\s*\?\s*'active'/)
+
+    // 2. schema_representativo.sql define DEFAULT 'joined' y CONSTRAINT room_participants_status_check
+    expect(schemaSource).toMatch(/status\s+text\s+NOT\s+NULL\s+DEFAULT\s+'joined'/)
+    expect(schemaSource).toMatch(
+      /CONSTRAINT\s+room_participants_status_check\s+CHECK\s*\(\s*status\s+IN\s*\(\s*'joined',\s*'in_progress',\s*'completed',\s*'abandoned'\s*\)\s*\)/
+    )
+
+    // 3. verify_rollout_and_rollback.mjs usa 'in_progress' en las semillas de room_participants
+    expect(rolloutSource).not.toMatch(/'hash_post_3',\s*'active'/)
+    expect(rolloutSource).not.toMatch(/'hash_reapply_4',\s*'active'/)
+    expect(rolloutSource).toMatch(/'hash_post_3',\s*'in_progress'/)
+    expect(rolloutSource).toMatch(/'hash_reapply_4',\s*'in_progress'/)
+
+    // 4. edgeFunctionAdapter aplica room_participants_status_check en insert y update en tiempo de ejecución
+    const adapterModulePath = '../../tests/fase-c/backend/edgeFunctionAdapter'
+    const {
+      VALID_ROOM_PARTICIPANT_STATUSES,
+      createMockDbStore,
+      buildMockSupabaseClient,
+    } = (await import(/* @vite-ignore */ adapterModulePath)) as {
+      VALID_ROOM_PARTICIPANT_STATUSES: Set<string>
+      createMockDbStore: () => { participants: Map<string, Record<string, unknown>> }
+      buildMockSupabaseClient: (store: unknown) => {
+        from: (table: string) => {
+          insert: (data: Record<string, unknown>) => {
+            select: () => { single: () => Promise<{ data: Record<string, unknown> | null; error: { code?: string; message?: string } | null }> }
+          }
+          update: (data: Record<string, unknown>) => {
+            eq: (col: string, val: unknown) => {
+              select: () => { maybeSingle: () => Promise<{ data: Record<string, unknown> | null; error: { code?: string; message?: string } | null }> }
+            }
+          }
+        }
+      }
+    }
+
+    expect(Array.from(VALID_ROOM_PARTICIPANT_STATUSES)).toEqual([
+      'joined',
+      'in_progress',
+      'completed',
+      'abandoned',
+    ])
+
+    const store = createMockDbStore()
+    const client = buildMockSupabaseClient(store)
+
+    // Default 'joined' cuando se omite status
+    const defaultInsert = await client
+      .from('room_participants')
+      .insert({ id: 'p-default', room_id: 'r-1', display_name: 'Ana', name_normalized: 'ana' })
+      .select()
+      .single()
+    expect(defaultInsert.error).toBeNull()
+    expect(defaultInsert.data?.status).toBe('joined')
+
+    // Rechazo de 'active' en insert (código 23514) sin mutar store.participants
+    const invalidInsert = await client
+      .from('room_participants')
+      .insert({ id: 'p-invalid', room_id: 'r-1', display_name: 'Mal', name_normalized: 'mal', status: 'active' })
+      .select()
+      .single()
+    expect(invalidInsert.data).toBeNull()
+    expect(invalidInsert.error?.code).toBe('23514')
+    expect(invalidInsert.error?.message).toContain('room_participants_status_check')
+    expect(store.participants.has('p-invalid')).toBe(false)
+
+    // Rechazo de 'active' en update (código 23514) preservando el estado previo
+    const invalidUpdate = await client
+      .from('room_participants')
+      .update({ status: 'active' })
+      .eq('id', 'p-default')
+      .select()
+      .maybeSingle()
+    expect(invalidUpdate.data).toBeNull()
+    expect(invalidUpdate.error?.code).toBe('23514')
+    expect(invalidUpdate.error?.message).toContain('room_participants_status_check')
+    expect(store.participants.get('p-default')?.status).toBe('joined')
+  })
+
+  it('mantiene el menú lateral (.sidebar) unido (.sidebar-footer con margin-top: 20px) y fijo (sticky) en escritorio sin bloqueo por overflow-x', async () => {
+    const fsModuleName = 'node:fs'
+    const { readFileSync } = (await import(/* @vite-ignore */ fsModuleName)) as {
+      readFileSync: (path: URL, encoding: string) => string
+    }
+
+    const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8')
+
+    // 1. .sidebar-footer usa margin-top: 20px y nunca margin-top: auto
+    expect(css).toMatch(/\.sidebar-footer\s*\{\s*margin-top:\s*20px\s*;?\s*\}/)
+    expect(css).not.toMatch(/\.sidebar-footer\s*\{[^}]*margin-top:\s*auto/)
+
+    // 2. .sidebar en escritorio (> 720px) tiene position: sticky, top: 76px, height: calc(100vh - 76px), overflow-y: auto
+    expect(css).toMatch(
+      /\.sidebar\{width:235px;[^}]*position:sticky;top:76px;height:calc\(100vh - 76px\);overflow-y:auto\}/
+    )
+    expect(css).toMatch(
+      /@media\s*\(min-width:\s*721px\)\s*\{\s*\.sidebar\s*\{\s*position:\s*sticky;\s*top:\s*76px;\s*height:\s*calc\(100vh\s*-\s*76px\);\s*overflow-y:\s*auto;\s*\}/
+    )
+
+    // 3. En móvil (<= 720px) se preserva el cajón fijo (position: fixed; left: 0; top: 64px; bottom: 0; height: auto)
+    expect(css).toMatch(
+      /@media\(max-width:720px\)\{\.mobile-nav-toggle\{display:inline-flex\}\.sidebar\{display:none;position:fixed;left:0;top:64px;bottom:0;width:min\(286px,86vw\);height:auto;/
+    )
+
+    // 4. Ancestros (html, body y .app-shell, .layout, .main-content) usan overflow-x: clip en vez de overflow-x: hidden
+    expect(css).toMatch(/html,\s*body\s*\{[^}]*overflow-x:\s*clip/)
+    expect(css).not.toMatch(/html,\s*body\s*\{[^}]*overflow-x:\s*hidden/)
+    expect(css).toMatch(/\.app-shell,\s*\.layout,\s*\.main-content\s*\{[^}]*overflow-x:\s*clip/)
+    expect(css).not.toMatch(/\.app-shell,\s*\.layout,\s*\.main-content\s*\{[^}]*overflow-x:\s*hidden/)
+  })
 })

@@ -40,6 +40,21 @@ export function createMockDbStore(): MockDbStore {
 let activeMockStore: MockDbStore | null = null
 let activeAuthUser: any = null
 
+export const VALID_ROOM_PARTICIPANT_STATUSES = new Set([
+  'joined',
+  'in_progress',
+  'completed',
+  'abandoned',
+])
+
+function buildRoomParticipantsStatusCheckError() {
+  return {
+    code: '23514',
+    message:
+      'new row for relation "room_participants" violates check constraint "room_participants_status_check"',
+  }
+}
+
 // Guard contra tráfico de red no autorizado
 const originalFetch = globalThis.fetch
 let networkGuardInstalled = false
@@ -228,19 +243,34 @@ export function buildMockSupabaseClient(store: MockDbStore, authUser: any = null
         }),
         insert: vi.fn((data: any) => {
           if (table === 'room_participants') {
+            const effectiveStatus = data.status ?? 'joined'
+            if (typeof effectiveStatus !== 'string' || !VALID_ROOM_PARTICIPANT_STATUSES.has(effectiveStatus)) {
+              const errResult = { data: null, error: buildRoomParticipantsStatusCheckError() }
+              const errBuilder: any = {
+                select: () => errBuilder,
+                single: async () => errResult,
+                maybeSingle: async () => errResult,
+                then: (resolve: any, reject: any) => Promise.resolve(errResult).then(resolve, reject),
+              }
+              return errBuilder
+            }
             const row = {
               id: data.id ?? crypto.randomUUID(),
               ...data,
+              status: effectiveStatus,
               joined_at: new Date().toISOString(),
               last_seen_at: new Date().toISOString(),
               guest_token_expires_at: data.guest_token_expires_at ?? new Date(Date.now() + 6 * 3600 * 1000).toISOString(),
             }
             store.participants.set(row.id, row)
-            return {
-              select: () => ({
-                single: async () => ({ data: { ...row }, error: null }),
-              }),
+            const okResult = { data: { ...row }, error: null }
+            const okBuilder: any = {
+              select: () => okBuilder,
+              single: async () => okResult,
+              maybeSingle: async () => okResult,
+              then: (resolve: any, reject: any) => Promise.resolve(okResult).then(resolve, reject),
             }
+            return okBuilder
           }
           if (table === 'attempts') {
             const row = {
@@ -278,6 +308,17 @@ export function buildMockSupabaseClient(store: MockDbStore, authUser: any = null
             if (cachedUpdateResult) return cachedUpdateResult
 
             if (table === 'room_participants') {
+              if (
+                'status' in data &&
+                (typeof data.status !== 'string' || !VALID_ROOM_PARTICIPANT_STATUSES.has(data.status))
+              ) {
+                cachedUpdateResult = {
+                  data: null,
+                  error: buildRoomParticipantsStatusCheckError(),
+                }
+                return cachedUpdateResult
+              }
+
               const targetId = String(updateEq['id'] ?? '')
               if ('activities_snapshot' in data) {
                 store.onBeforeSnapshotUpdate?.(targetId, data.activities_snapshot)
