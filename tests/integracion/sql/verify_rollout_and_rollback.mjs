@@ -228,8 +228,8 @@ export async function runSqlRolloutAndRollbackSuite() {
        VALUES
          ($1, $5, 'Alumno Duplicado Histórico', 'alumno duplicado historico', 'hash_dup_1', 'completed'),
          ($2, $5, 'Alumno Único Histórico', 'alumno unico historico', 'hash_single_2', 'completed'),
-         ($3, $5, 'Alumno Post Upgrade', 'alumno post upgrade', 'hash_post_3', 'active'),
-         ($4, $5, 'Alumno Post Reaplicación', 'alumno post reaplicacion', 'hash_reapply_4', 'active')`,
+         ($3, $5, 'Alumno Post Upgrade', 'alumno post upgrade', 'hash_post_3', 'in_progress'),
+         ($4, $5, 'Alumno Post Reaplicación', 'alumno post reaplicacion', 'hash_reapply_4', 'in_progress')`,
       [partDupId, partSingleId, partPostId, partReapplyId, roomId],
     );
 
