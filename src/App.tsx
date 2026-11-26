@@ -631,7 +631,7 @@ function App() {
   const [editingActivity, setEditingActivity] = useState<Activity | null>(null)
   const [preselectedRoomActivityIds, setPreselectedRoomActivityIds] = useState<string[] | null>(null)
   const [lastStudentAttempt, setLastStudentAttempt] = useState<StudentAttempt | null>(null)
-  const [adminScope, setAdminScope] = useState<'superadmin' | 'institution'>('institution')
+  const [adminScope, setAdminScope] = useState<'superadmin' | 'institution'>('superadmin')
   const [institutions, setInstitutions] = useState<Institution[]>(() => readStorage('edueval-institutions', initialInstitutions))
   const [activeInstitutionId, setActiveInstitutionId] = useState<string>('inst-san-simon')
   const [institutionTeachers, setInstitutionTeachers] = useState<Record<string, AdminUser[]>>(() => ({
@@ -1316,6 +1316,13 @@ function App() {
       return
     }
     setAdminSnapshot(data as AdminSnapshot)
+    if (data.scope === 'institution') {
+      setAdminScope('institution')
+      const instIds = (data as any).institutionIds
+      if (Array.isArray(instIds) && instIds.length > 0) {
+        setActiveInstitutionId(instIds[0])
+      }
+    }
   }
 
   useEffect(() => {
@@ -1398,6 +1405,24 @@ function App() {
 
     setInstitutions((prev) => [newInst, ...prev])
     notify(`Colegio ${newInst.name} registrado con éxito. Paquete de ${newInst.licenseLimit} licencias activado.`)
+  }
+
+  const handleDeleteInstitution = async (inst: Institution) => {
+    if (!window.confirm(`¿Seguro que deseas eliminar la institución "${inst.name}"? Esta acción no se puede deshacer.`)) return
+    if (supabase && isCloudId(inst.id)) {
+      try {
+        const { error } = await supabase.from('institutions').delete().eq('id', inst.id)
+        if (error) {
+          notify(`No se pudo eliminar la institución en la nube: ${error.message}`)
+          return
+        }
+      } catch (err) {
+        notify(`Error al eliminar institución: ${err instanceof Error ? err.message : 'Error desconocido'}`)
+        return
+      }
+    }
+    setInstitutions((prev) => prev.filter((i) => i.id !== inst.id))
+    notify(`Institución "${inst.name}" eliminada correctamente.`)
   }
 
   const handleAddTeacher = async (teacherData: { displayName: string; email: string; password?: string }) => {
@@ -3618,7 +3643,7 @@ function App() {
     {role !== 'student' && mobileNavOpen && <button className="mobile-nav-backdrop" type="button" aria-label="Cerrar navegación" onClick={() => setMobileNavOpen(false)} onTouchMove={(event) => event.preventDefault()} />}
     <div className="layout">
       {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v2.0</small></div></aside>}
-      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={() => void refreshStudentRoom(true)} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} onUpdateQuota={handleUpdateInstitutionQuota} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
+      <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => !current)}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={() => void refreshStudentRoom(true)} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} onUpdateQuota={handleUpdateInstitutionQuota} onDeleteInstitution={handleDeleteInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
     {showHelpModal && <HelpModal onClose={() => setShowHelpModal(false)} />}
@@ -3993,11 +4018,13 @@ function AdminScopeBanner({
   setAdminScope,
   institution,
   onGoToInstitutionDemo,
+  canSwitchScope = true,
 }: {
   adminScope: 'superadmin' | 'institution'
   setAdminScope: (scope: 'superadmin' | 'institution') => void
   institution: Institution
   onGoToInstitutionDemo: () => void
+  canSwitchScope?: boolean
 }) {
   if (adminScope === 'institution') {
     return (
@@ -4007,14 +4034,16 @@ function AdminScopeBanner({
           <h3>{institution.name}</h3>
           <small>{institution.planName} · Código: {institution.code}</small>
         </div>
-        <button
-          type="button"
-          className="scope-switch-btn superadmin-action"
-          onClick={() => setAdminScope('superadmin')}
-          title="Cambiar a administración general"
-        >
-          Administración general →
-        </button>
+        {canSwitchScope && (
+          <button
+            type="button"
+            className="scope-switch-btn superadmin-action"
+            onClick={() => setAdminScope('superadmin')}
+            title="Cambiar a administración general"
+          >
+            Administración general →
+          </button>
+        )}
       </div>
     )
   }
@@ -4174,6 +4203,7 @@ function AdminDashboard({
   institutions,
   onAddInstitution,
   onUpdateQuota,
+  onDeleteInstitution,
   activeInstitution,
   onSelectInstitution,
   teachers,
@@ -4185,6 +4215,7 @@ function AdminDashboard({
   institutions: Institution[]
   onAddInstitution: (data: { name: string; code: string; planName: string; licenseLimit: number; contactName: string; contactEmail: string; validUntil: string }) => void
   onUpdateQuota: (institution: Institution, nextLimit: number) => void
+  onDeleteInstitution?: (institution: Institution) => void
   activeInstitution: Institution
   onSelectInstitution: (id: string) => void
   teachers: AdminUser[]
@@ -4192,6 +4223,7 @@ function AdminDashboard({
   onNavigate: (view: View) => void
 }) {
   const [showRegisterModal, setShowRegisterModal] = useState(false)
+  const canSwitchScope = !adminData || (adminData as any).scope !== 'institution'
 
   // Cálculos para vista Superadmin
   const totalLicensesSold = institutions.reduce((acc, i) => acc + i.licenseLimit, 0)
@@ -4212,6 +4244,7 @@ function AdminDashboard({
           onSelectInstitution(institutions[0]?.id || 'inst-san-simon')
           setAdminScope('institution')
         }}
+        canSwitchScope={canSwitchScope}
       />
 
       {adminScope === 'superadmin' ? (
@@ -4336,6 +4369,17 @@ function AdminDashboard({
                             >
                               Ajustar cupo
                             </button>
+                            {onDeleteInstitution && (
+                              <button
+                                type="button"
+                                className="outline-button"
+                                style={{ fontSize: '11px', padding: '6px 10px', whiteSpace: 'nowrap', color: 'var(--red, #e05252)', borderColor: 'var(--line)' }}
+                                onClick={() => onDeleteInstitution(inst)}
+                                title={`Eliminar institución ${inst.name}`}
+                              >
+                                Eliminar
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -4729,6 +4773,7 @@ function AdminUsersView({
         setAdminScope={setAdminScope}
         institution={institution}
         onGoToInstitutionDemo={onHome}
+        canSwitchScope={!adminData || (adminData as any).scope !== 'institution'}
       />
 
       {/* Pestañas de origen de docentes: Directorio de la Plataforma vs Claustro Institucional */}
@@ -5150,6 +5195,7 @@ function AdminAuditView({
         setAdminScope={setAdminScope}
         institution={institution}
         onGoToInstitutionDemo={onHome}
+        canSwitchScope={!adminData || (adminData as any).scope !== 'institution'}
       />
 
       {/* Selector de origen de auditoría */}
