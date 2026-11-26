@@ -406,6 +406,75 @@ describe('importación JSON de contenido (v1 y v2)', () => {
       if (!result.ok) expect(result.issues[0].message).toContain('JSON válido')
     })
 
+    it('rechaza texto vacío', () => {
+      const result = parseContentImport('   ')
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.issues[0].message).toContain('vacío')
+    })
+
+    it('tolera y extrae JSON envuelto en bloques de código markdown con saludos y despedidas', () => {
+      const aiResponse = `
+¡Hola, estimado docente! Con gusto he procesado tu documento académico.
+Aquí tienes el banco estructurado para EvaluEdu:
+
+\`\`\`json
+{
+  "schema": "${CONTENT_SCHEMA_ID}",
+  "version": ${CONTENT_SCHEMA_VERSION_V1},
+  "content": {
+    "title": "Evaluación de Prueba",
+    "subject": "Medicina",
+    "description": "Conceptos clínicos.",
+    "objective": "Comprender la patología.",
+    "competency": "Diagnóstico inicial.",
+    "difficulty": "Inicial",
+    "concepts": [
+      { "name": "Hemostasia", "definition": "Detención de una hemorragia." }
+    ],
+    "situations": [],
+    "processSteps": [],
+    "categories": []
+  }
+}
+\`\`\`
+
+Espero que esta evaluación sea de gran provecho en tus clases.
+`
+      const result = parseContentImport(aiResponse)
+      expect(result.ok).toBe(true)
+      if (result.ok && result.version === 1) {
+        expect(result.document.content.title).toBe('Evaluación de Prueba')
+      }
+    })
+
+    it('tolera JSON con comas finales accidentales (trailing commas)', () => {
+      const jsonWithTrailingCommas = `
+{
+  "schema": "${CONTENT_SCHEMA_ID}",
+  "version": ${CONTENT_SCHEMA_VERSION_V1},
+  "content": {
+    "title": "Evaluación con Comas",
+    "subject": "Física",
+    "description": "Leyes de Newton.",
+    "objective": "Aplicar conceptos.",
+    "competency": "Resolución de problemas.",
+    "difficulty": "Inicial",
+    "concepts": [
+      { "name": "Inercia", "definition": "Resistencia al cambio de movimiento.", },
+    ],
+    "situations": [],
+    "processSteps": [],
+    "categories": [],
+  },
+}
+`
+      const result = parseContentImport(jsonWithTrailingCommas)
+      expect(result.ok).toBe(true)
+      if (result.ok && result.version === 1) {
+        expect(result.document.content.title).toBe('Evaluación con Comas')
+      }
+    })
+
     it('rechaza una versión o identificador de esquema no admitidos', () => {
       const result = validateContentDocument({ schema: 'otro.formato', version: 99 })
       expect(result.ok).toBe(false)

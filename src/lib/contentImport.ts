@@ -1576,14 +1576,74 @@ export function validateContentDocument(value: unknown): ContentImportResult {
   return { ok: false, issues }
 }
 
-export function parseContentImport(raw: string): ContentImportResult {
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return { ok: false, issues: [{ path: '$', message: 'El archivo no contiene JSON válido. Copia solo el objeto JSON, sin markdown ni texto adicional.' }] }
+/**
+ * Extrae y analiza un objeto JSON de una cadena de texto, tolerando:
+ * 1. Bloques de código Markdown (```json ... ``` o ``` ... ```).
+ * 2. Mensajes introductorios o de despedida de un asistente de IA.
+ * 3. Comas finales accidentales (trailing commas) antes de llaves o corchetes de cierre.
+ */
+export function extractAndParseJson(raw: string): { ok: true; data: unknown } | { ok: false; error: string } {
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return { ok: false, error: 'El contenido proporcionado está vacío.' }
   }
-  return validateContentDocument(value)
+
+  // Intento 1: Parse estándar directo
+  try {
+    return { ok: true, data: JSON.parse(trimmed) }
+  } catch {
+    // Continuar con estrategias de extracción
+  }
+
+  // Saneador de comas finales accidentales antes de } o ] (típico en respuestas de LLMs)
+  const sanitizeTrailingCommas = (text: string): string => {
+    return text.replace(/,\s*([}\]])/g, '$1')
+  }
+
+  // Intento 2: Buscar bloques de código Markdown ```json ... ``` o ``` ... ```
+  const codeBlockRegex = /```(?:json)?\s*([\s\S]*?)\s*```/gi
+  let match: RegExpExecArray | null
+  while ((match = codeBlockRegex.exec(trimmed)) !== null) {
+    const block = match[1].trim()
+    try {
+      return { ok: true, data: JSON.parse(block) }
+    } catch {
+      try {
+        return { ok: true, data: JSON.parse(sanitizeTrailingCommas(block)) }
+      } catch {
+        // Continuar buscando otros bloques o pasar a búsqueda por llaves
+      }
+    }
+  }
+
+  // Intento 3: Extraer desde la primera '{' hasta la última '}'
+  const firstBrace = trimmed.indexOf('{')
+  const lastBrace = trimmed.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = trimmed.slice(firstBrace, lastBrace + 1)
+    try {
+      return { ok: true, data: JSON.parse(candidate) }
+    } catch {
+      try {
+        return { ok: true, data: JSON.parse(sanitizeTrailingCommas(candidate)) }
+      } catch {
+        // Falló también con comas saneadas
+      }
+    }
+  }
+
+  return {
+    ok: false,
+    error: 'El archivo no contiene JSON válido o está incompleto. Copia la respuesta completa generada por la IA.',
+  }
+}
+
+export function parseContentImport(raw: string): ContentImportResult {
+  const parsed = extractAndParseJson(raw)
+  if (!parsed.ok) {
+    return { ok: false, issues: [{ path: '$', message: parsed.error }] }
+  }
+  return validateContentDocument(parsed.data)
 }
 
 export function detectContentCompatibility(content: ImportedContent): ContentCompatibility {

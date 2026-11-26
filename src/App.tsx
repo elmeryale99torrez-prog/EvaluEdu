@@ -60,6 +60,13 @@ import {
   resolveStudentReceiptEntries,
 } from './lib/studentSubmission'
 import { detectContentCompatibility, OFFICIAL_IMPORT_PROMPT, type ContentImportDocument, type ContentImportDocumentV1, type ContentImportResultV2, type ContentImportResultV1, type ActivityNeedingRepair, parseContentImport } from './lib/contentImport'
+import {
+  buildLocalEvalueduV1FromMarkdown,
+  convertDocumentsInBrowser,
+  DOCUMENT_ACCEPT_ATTR,
+  isSupportedDocumentFilename,
+  MAX_BROWSER_DOCUMENT_BYTES,
+} from './lib/documentConverter'
 import { TRUE_FALSE_LIMITS, validateTrueFalseDefinition } from './lib/activities/trueFalse'
 import { SINGLE_CHOICE_LIMITS, validateSingleChoiceDefinition } from './lib/activities/singleChoice'
 import { MULTI_SELECT_LIMITS, validateMultiSelectDefinition } from './lib/activities/multiSelect'
@@ -5891,7 +5898,7 @@ function ContentView({
   }
 
   return <>
-    <PageIntro eyebrow="BIBLIOTECA DE CONTENIDO" title="Crea experiencias que importan" description="Estructura tus contenidos o impórtalos; EvaluEdu generará las actividades compatibles para evaluar ese contenido." action={<div className="content-actions"><button className="outline-button" onClick={() => setShowJsonImport(true)}>⇧ Importar JSON</button><button className="primary-button" onClick={() => setShowTemplateForm(true)}>＋ Nueva plantilla</button></div>} />
+    <PageIntro eyebrow="BIBLIOTECA DE CONTENIDO" title="Crea experiencias que importan" description="Estructura tus contenidos o impórtalos; EvaluEdu generará las actividades compatibles para evaluar ese contenido." action={<div className="content-actions"><button className="outline-button" onClick={() => setShowJsonImport(true)}>⇧ Importar documento</button><button className="primary-button" onClick={() => setShowTemplateForm(true)}>＋ Nueva plantilla</button></div>} />
     <section className="template-section">
       <div className="section-heading">
         <div>
@@ -5946,119 +5953,541 @@ function ContentView({
   </>
 }
 
+type PendingDocumentGuardAction =
+  | { kind: 'remove_file'; index: number; fileName: string }
+  | { kind: 'clear_all' }
+  | { kind: 'change_documents' }
+  | { kind: 'close_modal' }
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function getFileExtensionLabel(name: string): string {
+  const idx = name.lastIndexOf('.')
+  if (idx === -1) return 'DOC'
+  return name.slice(idx + 1).toUpperCase().slice(0, 5)
+}
+
 function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImport: (documentOrPayload: ImportPayload) => void }) {
-  const [raw, setRaw] = useState('')
-  const [fileName, setFileName] = useState('')
-  const [copyStatus, setCopyStatus] = useState('Copiar prompt oficial')
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [isDragging, setIsDragging] = useState(false)
+  const [isReady, setIsReady] = useState(false)
+  const [showDriveHint, setShowDriveHint] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processingLabel, setProcessingLabel] = useState('Analizando documentos...')
+  const [docError, setDocError] = useState('')
+  const [pendingGuard, setPendingGuard] = useState<PendingDocumentGuardAction | null>(null)
+  const docInputRef = useRef<HTMLInputElement | null>(null)
+
   const [result, setResult] = useState<ReturnType<typeof parseContentImport> | null>(null)
   const validResult = result?.ok ? result : null
   const compatibleEntries = validResult ? Object.entries(validResult.compatibility).filter(([, item]) => item.available) : []
   const titleText = validResult ? (validResult.version === 2 ? validResult.topic.title : validResult.document.content.title) : ''
-  const schemaVersion = validResult ? validResult.version : 2
-  const readFile = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    setFileName(file.name)
-    if (file.size > 1_000_000) {
-      setResult({ ok: false, issues: [{ path: '$', message: 'El archivo supera el límite de 1 MB.' }] })
+
+  const openFilePicker = () => {
+    if (isProcessing) return
+    setDocError('')
+    if (docInputRef.current) {
+      docInputRef.current.value = ''
+      docInputRef.current.click()
+    }
+  }
+
+  const applyAddDocuments = (incoming: File[], resetProcessed: boolean) => {
+    if (!incoming.length) return
+    const errors: string[] = []
+    const accepted: File[] = []
+
+    for (const file of incoming) {
+      if (!isSupportedDocumentFilename(file.name)) {
+        errors.push(`"${file.name}" tiene un formato no admitido. Usa PDF, PowerPoint, Word, Excel o texto.`)
+        continue
+      }
+      if (file.size > MAX_BROWSER_DOCUMENT_BYTES) {
+        errors.push(`"${file.name}" supera el límite de 150 MB por archivo.`)
+        continue
+      }
+      accepted.push(file)
+    }
+
+    if (accepted.length) {
+      setSelectedFiles((prev) => {
+        const next = [...prev]
+        for (const file of accepted) {
+          const exists = next.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)
+          if (!exists) next.push(file)
+        }
+        return next
+      })
+      setIsReady(false)
+      if (resetProcessed) {
+        setResult(null)
+      }
+    }
+
+    setDocError(errors.join(' '))
+  }
+
+  const handleIncomingFiles = (incomingList: FileList | File[]) => {
+    const incoming = Array.from(incomingList)
+    if (!incoming.length || validResult) return
+    setDocError('')
+    applyAddDocuments(incoming, true)
+  }
+
+  const requestRemoveDocument = (indexToRemove: number, name: string) => {
+    if (isProcessing) return
+    if (validResult) {
+      setPendingGuard({ kind: 'remove_file', index: indexToRemove, fileName: name })
       return
     }
-    void file.text().then((text) => { setRaw(text); setResult(null) })
+    setSelectedFiles((prev) => prev.filter((_, idx) => idx !== indexToRemove))
+    setIsReady(false)
+    setResult(null)
+    setDocError('')
   }
-  const copyPrompt = async () => {
-    if (!navigator.clipboard) return setCopyStatus('Selecciona y copia el prompt manualmente')
-    try {
-      await navigator.clipboard.writeText(OFFICIAL_IMPORT_PROMPT)
-      setCopyStatus('Prompt copiado')
-    } catch {
-      setCopyStatus('Selecciona y copia el prompt manualmente')
+
+  const requestClearAll = () => {
+    if (isProcessing) return
+    if (validResult) {
+      setPendingGuard({ kind: 'clear_all' })
+      return
+    }
+    setSelectedFiles([])
+    setIsReady(false)
+    setResult(null)
+    setDocError('')
+  }
+
+  const requestChangeDocuments = () => {
+    if (isProcessing || !validResult) return
+    setPendingGuard({ kind: 'change_documents' })
+  }
+
+  const requestToggleReady = (checked: boolean) => {
+    if (isProcessing || validResult) return
+    setIsReady(checked)
+    if (!checked) {
+      setResult(null)
     }
   }
-  return <div className="modal-backdrop"><div className="modal-card json-import-modal"><div className="modal-head"><div><p className="eyebrow">IMPORTACIÓN CONTROLADA</p><h2>Importar contenido JSON</h2><p className="modal-subtitle">EvaluEdu no genera contenido con IA: valida el archivo, lo convierte en una plantilla interna y propone actividades para revisión docente.</p></div><button type="button" className="icon-button" onClick={onCancel}>×</button></div><div className="admin-notice"><span>i</span><div><b>Usa el prompt oficial con tu IA externa.</b><p>El prompt está bloqueado en modo solo lectura. EvaluEdu no confía en el prompt: valida siempre el JSON recibido y rechaza cualquier campo o estructura no autorizada.</p></div></div><details className="import-prompt-help"><summary>Ver prompt oficial del docente · solo lectura</summary><textarea className="import-prompt-readonly" value={OFFICIAL_IMPORT_PROMPT} readOnly rows={22} aria-label="Prompt oficial de importación, solo lectura" /><button type="button" className="outline-button" onClick={() => void copyPrompt()}>{copyStatus}</button></details><label>Seleccionar archivo JSON<input type="file" accept="application/json,.json" onChange={readFile} /></label>{fileName && <small className="field-hint">Archivo seleccionado: {fileName}</small>}<label>Pegar JSON<textarea value={raw} onChange={(event) => { setRaw(event.target.value); setResult(null) }} rows={10} placeholder={'{\n  "schema": "edueval.content",\n  "version": 2,\n  "topic": { ... },\n  "activities": [ ... ]\n}'} /></label>      <div className="import-action-bar">
-        <button
-          type="button"
-          className="outline-button validate-button"
-          onClick={() => setResult(parseContentImport(raw))}
-          disabled={!raw.trim()}
-        >
-          🔍 Validar estructura JSON
-        </button>
-        {raw.trim() && (
+
+  const requestCloseModal = () => {
+    if (isProcessing) return
+    if (validResult) {
+      setPendingGuard({ kind: 'close_modal' })
+      return
+    }
+    onCancel()
+  }
+
+  const confirmGuardAction = () => {
+    if (!pendingGuard) return
+    const action = pendingGuard
+    setPendingGuard(null)
+
+    if (action.kind === 'close_modal') {
+      onCancel()
+      return
+    }
+    if (action.kind === 'clear_all') {
+      setSelectedFiles([])
+      setIsReady(false)
+      setResult(null)
+      setDocError('')
+      return
+    }
+    if (action.kind === 'change_documents') {
+      setIsReady(false)
+      setResult(null)
+      setDocError('')
+      return
+    }
+    if (action.kind === 'remove_file') {
+      setSelectedFiles((prev) => prev.filter((_, idx) => idx !== action.index))
+      setIsReady(false)
+      setResult(null)
+      setDocError('')
+    }
+  }
+
+  const getGuardMessage = (action: PendingDocumentGuardAction): string => {
+    if (action.kind === 'remove_file') {
+      return `Ya procesaste tus documentos y las actividades propuestas están listas. Si eliminas "${action.fileName}", se cancelará este análisis y tendrás que procesar los documentos nuevamente.`
+    }
+    if (action.kind === 'clear_all') {
+      return 'Ya procesaste tus documentos y las actividades propuestas están listas. Si quitas todos los archivos, se perderá el análisis actual y tendrás que volver a importar.'
+    }
+    if (action.kind === 'change_documents') {
+      return 'Ya procesaste tus documentos y las actividades propuestas están listas. Si vuelves a modificar los documentos, se descartará este análisis y tendrás que procesar nuevamente.'
+    }
+    return 'Ya procesaste tus documentos y las actividades propuestas están listas. Si cierras esta ventana sin aceptar, perderás el análisis actual.'
+  }
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsDragging(false)
+    if (isProcessing) return
+    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+      handleIncomingFiles(event.dataTransfer.files)
+    }
+  }
+
+  const processDocuments = async () => {
+    if (!selectedFiles.length || !isReady || isProcessing) return
+    setIsProcessing(true)
+    setProcessingLabel('Leyendo documentos en tu dispositivo...')
+    setDocError('')
+    setPendingGuard(null)
+    setResult(null)
+
+    try {
+      // 1. Conversión 100% en el navegador (PC, tablet y celular): el archivo pesado nunca sale del dispositivo
+      const converted = await convertDocumentsInBrowser(selectedFiles, (msg) => setProcessingLabel(msg))
+      const filenames = selectedFiles.map((file) => file.name)
+
+      let rawJson = ''
+
+      // 2. Si Supabase está configurado con la Edge Function `teacher-document-analyze`,
+      // enviamos únicamente el texto limpio extraído (~10-15 KB) para generar el banco completo con IA
+      if (isSupabaseConfigured && supabase) {
+        setProcessingLabel('Preparando propuestas pedagógicas...')
+        try {
+          const { data, error } = await supabase.functions.invoke('teacher-document-analyze', {
+            body: {
+              markdown: converted.combinedMarkdown,
+              filenames,
+              prompt: OFFICIAL_IMPORT_PROMPT,
+            },
+          })
+          const fnPayload = data as { ok?: boolean; rawJson?: string } | null
+          if (!error && fnPayload?.ok && typeof fnPayload.rawJson === 'string' && fnPayload.rawJson.trim()) {
+            rawJson = fnPayload.rawJson
+          }
+        } catch {
+          // Respaldo transparente si la Edge Function aún no está desplegada o sin clave IA
+        }
+      }
+
+      // 3. Validar respuesta IA y aplicar respaldo estructurado transparente si el esquema no cumple
+      let parsed = rawJson ? parseContentImport(rawJson) : null
+      if (!parsed || !parsed.ok) {
+        const localDoc = buildLocalEvalueduV1FromMarkdown(converted.combinedMarkdown, filenames)
+        parsed = parseContentImport(JSON.stringify(localDoc))
+      }
+
+      setResult(parsed)
+    } catch (err) {
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'No se pudieron procesar los documentos seleccionados. Verifica que el archivo no esté dañado ni protegido con contraseña.'
+      setDocError(message)
+    } finally {
+      setIsProcessing(false)
+      setProcessingLabel('Analizando documentos...')
+    }
+  }
+
+  const confirmAndProceed = () => {
+    if (!validResult) return
+    if (validResult.version === 2) {
+      onImport({
+        version: 2,
+        topic: validResult.topic,
+        validActivities: validResult.validActivities,
+        activitiesNeedingRepair: validResult.activitiesNeedingRepair,
+      })
+    } else {
+      onImport(validResult.document)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-card json-import-modal doc-import-modal">
+        <div className="modal-head">
+          <div>
+            <p className="eyebrow">IMPORTACIÓN DE MATERIAL</p>
+            <h2>Importar documentos</h2>
+            <p className="modal-subtitle">
+              Adjunta tus materiales de clase, verifica tu selección y marca «Listo» para que EvaluEdu proponga actividades listas para tu revisión.
+            </p>
+          </div>
           <button
             type="button"
-            className="text-button"
-            onClick={() => { setRaw(''); setFileName(''); setResult(null) }}
+            className="icon-button"
+            onClick={requestCloseModal}
+            disabled={isProcessing}
+            aria-label="Cerrar ventana"
           >
-            Limpiar
+            ×
           </button>
-        )}
-      </div>
-      {result && !result.ok && (
-        <div className="form-error import-errors">
-          <b>No se puede importar todavía.</b>
-          <ul>
-            {result.issues.map((issue, index) => (
-              <li key={`${issue.path}-${index}`}>
-                <code>{issue.path}</code> · {issue.message}
-              </li>
-            ))}
-          </ul>
         </div>
-      )}
-      {validResult && (
-        <section className="import-validation">
-          <div className="admin-notice success">
-            <span>✓</span>
-            <div>
-              <b>JSON válido · esquema v{schemaVersion}</b>
-              <p>
-                {titleText} · {compatibleEntries.length} formato{compatibleEntries.length === 1 ? '' : 's'} compatible
-                {compatibleEntries.length === 1 ? '' : 's'} detectado{compatibleEntries.length === 1 ? '' : 's'}.
-              </p>
-            </div>
-          </div>
-          <div className="compatibility-grid">
-            {Object.entries(validResult.compatibility).map(([key, item]) => (
-              <div className={`compatibility-item ${item.available ? '' : 'unavailable'}`} key={key}>
-                <span>{item.available ? '✓' : '×'}</span>
-                <b>{types[key as ActivityType].label}</b>
-                <small>{item.available ? 'Se propondrá para revisión' : item.reason}</small>
+
+        <div className="doc-import-body">
+          <input
+            ref={docInputRef}
+            type="file"
+            multiple
+            accept={DOCUMENT_ACCEPT_ATTR}
+            className="sr-only"
+            onChange={(event) => {
+              const picked = event.target.files ? Array.from(event.target.files) : []
+              event.target.value = ''
+              if (picked.length > 0) handleIncomingFiles(picked)
+            }}
+          />
+
+          {!validResult && (
+            <div
+              className={`doc-dropzone ${isDragging ? 'dragging' : ''}`}
+              onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }}
+              onDragLeave={(event) => { event.preventDefault(); setIsDragging(false) }}
+              onDrop={handleDrop}
+            >
+              <div className="doc-dropzone-icon" aria-hidden="true">📂</div>
+              <strong className="doc-dropzone-desktop-title">Arrastra y suelta tus documentos aquí</strong>
+              <strong className="doc-dropzone-mobile-title">Selecciona tus documentos desde tu celular o Drive</strong>
+              <p>Admite PDF, PowerPoint (.pptx), Word (.docx), Excel (.xlsx) o archivos de texto.</p>
+              <div className="doc-dropzone-actions">
+                <button
+                  type="button"
+                  className="outline-button"
+                  onClick={openFilePicker}
+                  disabled={isProcessing}
+                >
+                  📁 Adjuntar desde mi dispositivo
+                </button>
+                <button
+                  type="button"
+                  className="outline-button"
+                  onClick={() => setShowDriveHint((prev) => !prev)}
+                  disabled={isProcessing}
+                >
+                  ☁️ Adjuntar desde Drive
+                </button>
               </div>
-            ))}
-          </div>
-          {!compatibleEntries.length && (
-            <div className="form-error">
-              El esquema es válido, pero falta información para detectar una actividad compatible. Completa conceptos,
-              situaciones, pasos o categorías y vuelve a validar.
+              {showDriveHint && (
+                <div className="doc-drive-notice">
+                  <p>
+                    <b>Google Drive / OneDrive / iCloud:</b> Desde el selector de archivos de tu celular o computadora puedes elegir directamente los documentos guardados en Drive sin descargarlos antes.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => { setShowDriveHint(false); openFilePicker() }}
+                  >
+                    Abrir selector de archivos →
+                  </button>
+                </div>
+              )}
             </div>
           )}
-        </section>
-      )}
-      <div className="modal-actions import-bottom-actions">
-        <button type="button" className="outline-button" onClick={onCancel}>
-          Cancelar
-        </button>
-        <button
-          type="button"
-          className="primary-button"
-          disabled={!validResult || !compatibleEntries.length}
-          onClick={() => {
-            if (!validResult) return
-            if (validResult.version === 2) {
-              onImport({
-                version: 2,
-                topic: validResult.topic,
-                validActivities: validResult.validActivities,
-                activitiesNeedingRepair: validResult.activitiesNeedingRepair,
-              })
-            } else {
-              onImport(validResult.document)
-            }
-          }}
-        >
-          Aceptar e ir a propuestas →
-        </button>
-      </div></div></div>
+
+          {selectedFiles.length > 0 && (
+            <section className="doc-queue-section" aria-label="Documentos seleccionados">
+              <div className="doc-queue-header">
+                <strong>
+                  {validResult
+                    ? `Documentos analizados (${selectedFiles.length})`
+                    : `Documentos adjuntados (${selectedFiles.length})`}
+                </strong>
+                <div className="doc-queue-header-actions">
+                  {!validResult ? (
+                    <>
+                      <button
+                        type="button"
+                        className="text-button"
+                        onClick={openFilePicker}
+                        disabled={isProcessing}
+                      >
+                        ＋ Agregar otro
+                      </button>
+                      <button
+                        type="button"
+                        className="text-button danger-text-button"
+                        onClick={requestClearAll}
+                        disabled={isProcessing}
+                      >
+                        Quitar todos
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={requestChangeDocuments}
+                      disabled={isProcessing}
+                    >
+                      Cambiar documentos
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <ul className="doc-queue-list">
+                {selectedFiles.map((file, idx) => (
+                  <li key={`${file.name}-${file.size}-${file.lastModified}`} className="doc-queue-item">
+                    <span className="doc-ext-badge">{getFileExtensionLabel(file.name)}</span>
+                    <div className="doc-queue-info">
+                      <b title={file.name}>{file.name}</b>
+                      <small>{formatFileSize(file.size)}</small>
+                    </div>
+                    {validResult && <span className="doc-analyzed-pill">✓ Analizado</span>}
+                    <button
+                      type="button"
+                      className="doc-remove-btn"
+                      onClick={() => requestRemoveDocument(idx, file.name)}
+                      disabled={isProcessing}
+                      title={`Eliminar ${file.name}`}
+                      aria-label={`Eliminar ${file.name}`}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+              {!validResult && (
+                <label className={`doc-ready-check ${isReady ? 'checked' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={isReady}
+                    disabled={isProcessing}
+                    onChange={(event) => requestToggleReady(event.target.checked)}
+                  />
+                  <div>
+                    <b>Listo para importar</b>
+                    <small>
+                      {selectedFiles.length === 1
+                        ? 'Confirmo que este documento es correcto y habilito el botón de importación.'
+                        : `Confirmo que estos ${selectedFiles.length} documentos son correctos y habilito el botón de importación.`}
+                    </small>
+                  </div>
+                </label>
+              )}
+            </section>
+          )}
+
+          {pendingGuard && (
+            <div className="doc-confirm-guard" role="alertdialog" aria-labelledby="doc-guard-title">
+              <div className="doc-confirm-guard-head">
+                <span aria-hidden="true">⚠️</span>
+                <b id="doc-guard-title">Confirmación de seguridad</b>
+              </div>
+              <p>{getGuardMessage(pendingGuard)}</p>
+              <div className="doc-confirm-guard-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => setPendingGuard(null)}
+                >
+                  Mantener análisis actual
+                </button>
+                <button
+                  type="button"
+                  className="outline-button doc-guard-danger-btn"
+                  onClick={confirmGuardAction}
+                >
+                  Sí, descartar y continuar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {docError && (
+            <div className="form-error import-errors doc-error-dismissible">
+              <div className="doc-error-content">
+                <b>No se pudo completar la acción</b>
+                <p>{docError}</p>
+              </div>
+              <button
+                type="button"
+                className="doc-error-close"
+                onClick={() => setDocError('')}
+                aria-label="Cerrar aviso"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+
+        {result && !result.ok && (
+          <div className="form-error import-errors">
+            <b>No se puede importar todavía.</b>
+            <ul>
+              {result.issues.map((issue, index) => (
+                <li key={`${issue.path}-${index}`}>
+                  <code>{issue.path}</code> · {issue.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {validResult && (
+          <section className="import-validation">
+            <div className="admin-notice success">
+              <span>✓</span>
+              <div>
+                <b>Documentos analizados con éxito</b>
+                <p>
+                  {titleText} · {compatibleEntries.length} formato{compatibleEntries.length === 1 ? '' : 's'} compatible
+                  {compatibleEntries.length === 1 ? '' : 's'} listo{compatibleEntries.length === 1 ? '' : 's'} para revisión.
+                </p>
+              </div>
+            </div>
+            <div className="compatibility-grid">
+              {Object.entries(validResult.compatibility).map(([key, item]) => (
+                <div className={`compatibility-item ${item.available ? '' : 'unavailable'}`} key={key}>
+                  <span>{item.available ? '✓' : '×'}</span>
+                  <b>{types[key as ActivityType].label}</b>
+                  <small>{item.available ? 'Se propondrá para revisión' : item.reason}</small>
+                </div>
+              ))}
+            </div>
+            {!compatibleEntries.length && (
+              <div className="form-error">
+                El material se analizó, pero falta contenido suficiente para proponer actividades. Agrega otro documento con conceptos, pasos o casos y vuelve a intentarlo.
+              </div>
+            )}
+          </section>
+        )}
+
+        <div className="modal-actions import-bottom-actions">
+          <button type="button" className="outline-button" onClick={requestCloseModal} disabled={isProcessing}>
+            Cancelar
+          </button>
+          {!validResult ? (
+            <button
+              type="button"
+              className="primary-button"
+              disabled={selectedFiles.length === 0 || !isReady || isProcessing}
+              onClick={() => void processDocuments()}
+            >
+              {isProcessing
+                ? processingLabel
+                : `Importar documento${selectedFiles.length > 1 ? 's' : ''} →`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!compatibleEntries.length}
+              onClick={confirmAndProceed}
+            >
+              Aceptar e ir a propuestas →
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function compatibility(template: EvaluationTemplate): Record<ActivityType, { available: boolean; reason: string }> {
