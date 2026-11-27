@@ -1,4 +1,4 @@
-const VERSION = 'evaluedu-shell-v2.0.1-toggle-brand-20261116'
+const VERSION = 'evaluedu-shell-v2.1.0-drive-import-20261126'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()

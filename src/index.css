@@ -7000,6 +7000,13 @@ body.body-modal-locked {
 }
 
 /* Google Drive Picker siempre por encima de los modales de EvaluEdu */
+.modal-backdrop.drive-picker-open {
+  z-index: 10 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.picker,
 .picker-dialog-bg {
   z-index: 9998 !important;
 }

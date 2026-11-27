@@ -6235,7 +6235,7 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className={`modal-backdrop${isLoadingDrive ? ' drive-picker-open' : ''}`}>
       <div className="modal-card json-import-modal doc-import-modal">
         <div className="modal-head">
           <div>
