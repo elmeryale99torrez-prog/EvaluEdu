@@ -67,6 +67,7 @@ import {
   isSupportedDocumentFilename,
   MAX_BROWSER_DOCUMENT_BYTES,
 } from './lib/documentConverter'
+import { pickFilesFromGoogleDrive } from './lib/googleDrivePicker'
 import { TRUE_FALSE_LIMITS, validateTrueFalseDefinition } from './lib/activities/trueFalse'
 import { SINGLE_CHOICE_LIMITS, validateSingleChoiceDefinition } from './lib/activities/singleChoice'
 import { MULTI_SELECT_LIMITS, validateMultiSelectDefinition } from './lib/activities/multiSelect'
@@ -5975,7 +5976,8 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isDragging, setIsDragging] = useState(false)
   const [isReady, setIsReady] = useState(false)
-  const [showDriveHint, setShowDriveHint] = useState(false)
+  const [isLoadingDrive, setIsLoadingDrive] = useState(false)
+  const [driveStatus, setDriveStatus] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingLabel, setProcessingLabel] = useState('Analizando documentos...')
   const [docError, setDocError] = useState('')
@@ -5988,11 +5990,32 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
   const titleText = validResult ? (validResult.version === 2 ? validResult.topic.title : validResult.document.content.title) : ''
 
   const openFilePicker = () => {
-    if (isProcessing) return
+    if (isProcessing || isLoadingDrive) return
     setDocError('')
     if (docInputRef.current) {
       docInputRef.current.value = ''
       docInputRef.current.click()
+    }
+  }
+
+  const openGoogleDrivePicker = async () => {
+    if (isProcessing || isLoadingDrive || validResult) return
+    setIsLoadingDrive(true)
+    setDriveStatus('Conectando con Google Drive...')
+    setDocError('')
+    try {
+      const filesFromDrive = await pickFilesFromGoogleDrive((status) => setDriveStatus(status))
+      if (filesFromDrive.length > 0) {
+        handleIncomingFiles(filesFromDrive)
+      }
+    } catch (err) {
+      const msg = err instanceof Error && err.message
+        ? err.message
+        : 'No se pudo conectar con Google Drive en este momento.'
+      setDocError(msg)
+    } finally {
+      setIsLoadingDrive(false)
+      setDriveStatus('')
     }
   }
 
@@ -6252,39 +6275,25 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
               <div className="doc-dropzone-icon" aria-hidden="true">📂</div>
               <strong className="doc-dropzone-desktop-title">Arrastra y suelta tus documentos aquí</strong>
               <strong className="doc-dropzone-mobile-title">Selecciona tus documentos desde tu celular o Drive</strong>
-              <p>Admite PDF, PowerPoint (.pptx), Word (.docx), Excel (.xlsx) o archivos de texto.</p>
+              <p>Admite PDF, PowerPoint, Word, Excel, Google Docs, Google Slides o archivos de texto.</p>
               <div className="doc-dropzone-actions">
                 <button
                   type="button"
                   className="outline-button"
                   onClick={openFilePicker}
-                  disabled={isProcessing}
+                  disabled={isProcessing || isLoadingDrive}
                 >
                   📁 Adjuntar desde mi dispositivo
                 </button>
                 <button
                   type="button"
                   className="outline-button"
-                  onClick={() => setShowDriveHint((prev) => !prev)}
-                  disabled={isProcessing}
+                  onClick={() => void openGoogleDrivePicker()}
+                  disabled={isProcessing || isLoadingDrive}
                 >
-                  ☁️ Adjuntar desde Drive
+                  {isLoadingDrive ? `☁️ ${driveStatus || 'Conectando con Drive...'}` : '☁️ Adjuntar desde Google Drive'}
                 </button>
               </div>
-              {showDriveHint && (
-                <div className="doc-drive-notice">
-                  <p>
-                    <b>Google Drive / OneDrive / iCloud:</b> Desde el selector de archivos de tu celular o computadora puedes elegir directamente los documentos guardados en Drive sin descargarlos antes.
-                  </p>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={() => { setShowDriveHint(false); openFilePicker() }}
-                  >
-                    Abrir selector de archivos →
-                  </button>
-                </div>
-              )}
             </div>
           )}
 
