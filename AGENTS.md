@@ -66,8 +66,11 @@ Contenido docente → IA externa con prompt oficial → JSON `edueval.content` v
 → Revisión y aprobación docente → Selección para sala de evaluación
 ```
 
-- **IA externa desacoplada:** EvaluEdu no envía datos de los docentes a APIs externas. La IA externa es solo una herramienta del docente para estructurar su material en JSON.
+- **IA externa desacoplada:** La creación de contenido pedagógico no expone datos de estudiantes ni calificaciones a APIs externas.
 - **Autoridad del validador local:** El validador en `src/lib/contentImport.ts` es la autoridad final y rechaza esquemas no conformes o datos inventados.
+- **Asistente Docente Híbrido (soporte en aula):**
+  - *Capa 1 (Local / Offline):* Mini-Vault en `src/knowledge/` y motor `src/lib/helpAssistant/` que responden al instante sin internet.
+  - *Capa 2 (Opcional en línea):* La Edge Function `teacher-help-assistant` (con cascada Gemini + NVIDIA NIM vía Secrets de Supabase) atiende únicamente a docentes autenticados (nunca a estudiantes reales ni al panel administrativo), sanitiza correos/teléfonos, no accede a tablas de alumnos ni notas, y procesa capturas de pantalla exclusivamente en memoria RAM sin guardarlas.
 
 ---
 
@@ -76,5 +79,5 @@ Contenido docente → IA externa con prompt oficial → JSON `edueval.content` v
 - **TypeScript estricto:** Cero `any` injustificados; contratos fuertemente tipados.
 - **Modo Día y Noche:** Todos los estilos en `src/index.css` y `src/theme.css` deben respetar las variables de tema (`var(--paper)`, `var(--ink)`, `var(--line)`). No usar colores hexadecimales fijos sobre fondos adaptativos.
 - **Verificación obligatoria previa a cualquier entrega:**
-  1. `npm run test`: Todas las suites de Vitest deben pasar (40/40 suites, 280/280 pruebas).
+  1. `npm run test`: Todas las suites de Vitest deben pasar al 100 % sin regresiones.
   2. `npm run build`: Compilación de tipos (`tsc -b`) y empaquetado de producción con Vite (`vite build`) limpios sin errores.

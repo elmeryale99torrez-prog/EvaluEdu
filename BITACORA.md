@@ -1537,3 +1537,23 @@ Pendiente: revisar las decisiones concretas de contrato/puntaje/confirmación de
 - **Verificación Técnica:**
   - `npm.cmd test`: 34 suites pasadas, 241/241 pruebas aprobadas (100% de éxito).
   - `npm.cmd run build`: Compilación TypeScript (`tsc -b`) y empaquetado de producción Vite en 650ms.
+
+---
+
+### Asistente Docente Híbrido (Capa 1 Offline + Capa 2 Multimodal con Visión) · 2026-11-27
+- **Estado:** ✅ **IMPLEMENTADO, DESPLEGADO EN SUPABASE Y VERIFICADO (43/43 SUITES, 339/339 PRUEBAS, BUILD LIMPIO EN 895ms)**
+- **Arquitectura Híbrida:**
+  1. **Capa 1 (Local / Offline / $0):**
+     - Mini-Vault Obsidian estructurado en `src/knowledge/` (58 notas Markdown, 312 `[[wikilinks]]`, 0 enlaces rotos, 0 notas huérfanas, cobertura de las 13 actividades oficiales, flujos del Panel Docente, Google Drive Picker, Panel Estudiante y 12 guías de emergencia en vivo). `src/knowledge/.obsidian/` permanece excluido en `.gitignore`.
+     - Motor local en `src/lib/helpAssistant/` (`vaultParser.ts`, `vaultIndex.ts`, `localEngine.ts`, `visibility.ts`, `contextWindow.ts`, `screenCapture.ts`, `cloudAdapter.ts`) con diccionario de sinónimos, ventana de contexto deslizante con auto-refresco (25 min o 12 turnos), sanitización de correos/teléfonos y captura automática de pantalla bajo demanda (`html-to-image` + compresión `<canvas>` a `1024 px`).
+  2. **Capa 2 (En línea / Visión + Consultas abiertas):**
+     - Edge Function `supabase/functions/teacher-help-assistant/index.ts` desplegada en producción (`verify_jwt: true`) con verificación estricta de sesión real no anónima y perfil docente en `profiles`, cuotas por docente, sanitización PII, cero acceso a tablas de estudiantes/calificaciones y procesamiento de capturas únicamente en memoria RAM.
+     - Cascada multimodal configurable vía Secrets (`GEMINI_API_KEY` y `NVIDIA_API_KEY`): visión con NVIDIA NIM (`google/gemma-3-12b-it`, `google/gemma-3-27b-it`, `meta/llama-3.2-*`) y respaldo Gemini (`gemini-3.8-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite`); texto con Gemini y respaldo NVIDIA NIM.
+  3. **Interfaz y Regla de Visibilidad:**
+     - Mascota flotante 3D animada (`src/components/FlameBot3D.tsx`) y chat no bloqueante (`src/components/TeacherAssistantWidget.tsx`) arrastrable libremente en X/Y, anclado a la posición de la flama, scroll 100 % aislado, exclusión mutua con el menú móvil, saludo personalizado, 3 guías relacionadas, retroalimentación (`¿Se resolvió tu duda?`) y bloqueo limpio de capturas en modo sin conexión.
+     - Visible **exclusivamente** para docentes autenticados con correo real (Panel Docente y *Probar como Estudiante*); completamente oculto para estudiantes reales y en el Panel Administrativo.
+- **Verificación Técnica:**
+  - `src/lib/helpAssistant/helpAssistant.test.ts`: 44 pruebas dedicadas (integridad del grafo, visibilidad por rol, 24 consultas reales de docentes, ventana de contexto, degradación offline y contrato de seguridad de `teacher-help-assistant`).
+  - `npm.cmd run test`: **43/43 suites, 339/339 pruebas aprobadas**.
+  - `npm.cmd run build`: `tsc -b && vite build` limpio en 895ms.
+  - `supabase functions deploy teacher-help-assistant`: activa en proyecto `EvaluEdu` (`hjcspzgglchnksnrcwmd`).

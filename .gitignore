@@ -4,3 +4,4 @@ dist/
 *.bak
 supabase/.temp/
 promo-evaluedu/
+src/knowledge/.obsidian/
