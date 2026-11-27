@@ -4757,11 +4757,22 @@ body.body-modal-locked {
 /* ========================================================
    NIVELACIÓN MILIMÉTRICA DE ACCIONES Y BOTONES EMPAREJADOS
    ======================================================== */
-.room-create-actions,
-.content-actions {
+.room-create-actions {
   display: flex !important;
   align-items: center !important;
   gap: 10px !important;
+}
+
+.content-actions {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.content-actions .primary-button,
+.content-actions .outline-button {
+  width: 100% !important;
 }
 
 .room-create-actions .primary-button,
@@ -4805,6 +4816,12 @@ body.body-modal-locked {
     justify-content: center !important;
     text-align: center !important;
     box-sizing: border-box !important;
+  }
+}
+
+@media (max-width: 420px) {
+  .content-actions {
+    grid-template-columns: 1fr !important;
   }
 }
 
@@ -6688,15 +6705,25 @@ body.body-modal-locked {
 
 .doc-import-modal {
   overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.doc-import-modal * {
+  box-sizing: border-box;
 }
 
 .doc-import-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
+  width: 100%;
   min-width: 0;
 }
 
 .doc-dropzone {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: 2px dashed var(--line);
   border-radius: 14px;
   background: var(--paper-subtle);
@@ -6765,7 +6792,10 @@ body.body-modal-locked {
 
 .doc-queue-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+  width: 100%;
+  min-width: 0;
 }
 
 .doc-queue-header {
@@ -6774,6 +6804,7 @@ body.body-modal-locked {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .doc-queue-header strong {
@@ -6792,7 +6823,10 @@ body.body-modal-locked {
   margin: 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .doc-queue-item {
@@ -6803,6 +6837,9 @@ body.body-modal-locked {
   border-radius: 11px;
   background: var(--paper);
   border: 1px solid var(--line);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .doc-ext-badge {
@@ -6864,6 +6901,8 @@ body.body-modal-locked {
   flex-direction: row !important;
   align-items: flex-start;
   gap: 12px;
+  width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: 12px;
   background: var(--paper-subtle);
