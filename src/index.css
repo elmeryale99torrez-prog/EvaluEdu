@@ -4757,22 +4757,41 @@ body.body-modal-locked {
 /* ========================================================
    NIVELACIÓN MILIMÉTRICA DE ACCIONES Y BOTONES EMPAREJADOS
    ======================================================== */
+.page-intro {
+  flex-wrap: wrap !important;
+}
+
+.page-intro > div:first-child {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
 .room-create-actions {
   display: flex !important;
   align-items: center !important;
   gap: 10px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: wrap !important;
+  max-width: 100% !important;
 }
 
 .content-actions {
-  display: grid !important;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  display: flex !important;
   align-items: center !important;
+  justify-content: flex-end !important;
   gap: 10px !important;
+  flex-shrink: 0 !important;
+  flex-wrap: wrap !important;
+  max-width: 100% !important;
 }
 
 .content-actions .primary-button,
 .content-actions .outline-button {
-  width: 100% !important;
+  width: auto !important;
+  max-width: 100% !important;
+  flex: 0 0 auto !important;
+  padding: 10px 18px !important;
+  white-space: nowrap !important;
 }
 
 .room-create-actions .primary-button,
@@ -4780,7 +4799,7 @@ body.body-modal-locked {
 .content-actions .primary-button,
 .content-actions .outline-button {
   min-height: 44px !important;
-  height: 44px !important;
+  height: auto !important;
   margin: 0 !important;
   margin-top: 0 !important;
   margin-bottom: 0 !important;
@@ -4788,7 +4807,7 @@ body.body-modal-locked {
   align-items: center !important;
   justify-content: center !important;
   vertical-align: middle !important;
-  line-height: 1 !important;
+  line-height: 1.2 !important;
   box-sizing: border-box !important;
 }
 
@@ -4796,7 +4815,7 @@ body.body-modal-locked {
   .room-create-actions,
   .content-actions {
     display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
+    grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)) !important;
     gap: 8px !important;
     width: 100% !important;
     margin-top: 10px !important;
@@ -4806,11 +4825,13 @@ body.body-modal-locked {
   .content-actions button {
     width: 100% !important;
     min-height: 44px !important;
-    height: 44px !important;
+    height: auto !important;
     margin: 0 !important;
     margin-top: 0 !important;
-    padding: 10px 12px !important;
+    padding: 10px 14px !important;
     font-size: 12px !important;
+    white-space: normal !important;
+    line-height: 1.25 !important;
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -4819,7 +4840,7 @@ body.body-modal-locked {
   }
 }
 
-@media (max-width: 420px) {
+@media (max-width: 440px) {
   .content-actions {
     grid-template-columns: 1fr !important;
   }

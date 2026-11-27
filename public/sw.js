@@ -1,4 +1,4 @@
-const VERSION = 'evaluedu-shell-v2.1.2-drive-transition-20261126'
+const VERSION = 'evaluedu-shell-v2.2.1-assistant-ui-20261127'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
