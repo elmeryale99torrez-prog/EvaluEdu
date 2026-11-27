@@ -637,6 +637,7 @@ function App() {
   const inFlightUpdateAbortRef = useRef<Map<string, AbortController>>(new Map())
   activeStudentSessionRef.current = studentRoom ? { roomId: studentRoom.id, participantId: studentParticipantId } : null
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
+  const [appUpdateAvailable, setAppUpdateAvailable] = useState(false)
   const [showPasswordChange, setShowPasswordChange] = useState(false)
   const [showHelpModal, setShowHelpModal] = useState(false)
   const [assistantOpenSignal, setAssistantOpenSignal] = useState(0)
@@ -688,6 +689,55 @@ function App() {
       window.removeEventListener('appinstalled', handleInstalled)
     }
   }, [])
+
+  // Auto-actualización segura cuando llega una nueva versión del Service Worker
+  useEffect(() => {
+    const handleUpdateReady = () => {
+      const isStudentTakingExam = role === 'student' && Boolean(studentRoom) && !studentFinished
+      const hasActiveModal =
+        showHelpModal ||
+        showPasswordChange ||
+        showFeedbackModal ||
+        Boolean(editingActivity) ||
+        Boolean(selectedActivity) ||
+        Boolean(previewingStudentActivity) ||
+        (typeof document !== 'undefined' && Boolean(document.querySelector('.modal-backdrop')))
+
+      if (isStudentTakingExam || hasActiveModal) {
+        setAppUpdateAvailable(true)
+        return
+      }
+
+      // Evitar cualquier recarga repetida dentro de una ventana de 15 segundos
+      try {
+        const lastReloadRaw = window.sessionStorage.getItem('evaluedu-sw-auto-reloaded-at')
+        const lastReloadMs = lastReloadRaw ? Number(lastReloadRaw) : 0
+        if (Number.isFinite(lastReloadMs) && Date.now() - lastReloadMs < 15_000) {
+          setAppUpdateAvailable(true)
+          return
+        }
+        window.sessionStorage.setItem('evaluedu-sw-auto-reloaded-at', String(Date.now()))
+      } catch {
+        // Si sessionStorage no está disponible, mostrar banner en lugar de recargar a ciegas
+        setAppUpdateAvailable(true)
+        return
+      }
+      window.location.reload()
+    }
+
+    window.addEventListener('evaluedu-app-update-ready', handleUpdateReady)
+    return () => window.removeEventListener('evaluedu-app-update-ready', handleUpdateReady)
+  }, [
+    role,
+    studentRoom,
+    studentFinished,
+    showHelpModal,
+    showPasswordChange,
+    showFeedbackModal,
+    editingActivity,
+    selectedActivity,
+    previewingStudentActivity,
+  ])
   useEffect(() => { if (toast) { const timer = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timer) } }, [toast])
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentDate(new Date()), 60_000)
@@ -2977,15 +3027,22 @@ function App() {
           if (!result.error && result.data?.length) {
             synced = true
           } else if (!result.error) {
-            const { data: currentRow } = await supabase
+            const { data: currentRow, error: lookupError } = await supabase
               .from('activities')
               .select('id, updated_at')
               .eq('id', act.id)
               .eq('owner_id', authProfile.id)
               .maybeSingle()
-            if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt)) {
+            if (
+              (!lookupError && !currentRow) ||
+              (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt))
+            ) {
+              // Registro eliminado en la nube o versión más reciente ya guardada: retirar ítem obsoleto
               synced = true
             }
+          } else if (result.error.code === '22P02' || result.error.code === '23503') {
+            // Error permanente (UUID temporal obsoleto o referencia eliminada): evitar bucle infinito
+            synced = true
           }
           if (synced) {
             const rm = removeSyncItemsForEntityIfNotNewer('activity_update', act.id, authProfile.id, item.clientRevision, editUpdatedAt)
@@ -3030,15 +3087,20 @@ function App() {
           if (!result.error && result.data?.length) {
             synced = true
           } else if (!result.error) {
-            const { data: currentRow } = await supabase
+            const { data: currentRow, error: lookupError } = await supabase
               .from('evaluation_templates')
               .select('id, updated_at')
               .eq('id', tmpl.id)
               .eq('owner_id', authProfile.id)
               .maybeSingle()
-            if (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt)) {
+            if (
+              (!lookupError && !currentRow) ||
+              (currentRow && typeof currentRow.updated_at === 'string' && Date.parse(currentRow.updated_at) >= Date.parse(editUpdatedAt))
+            ) {
               synced = true
             }
+          } else if (result.error.code === '22P02' || result.error.code === '23503') {
+            synced = true
           }
           if (synced) {
             const rm = removeSyncItemsForEntityIfNotNewer('template_update', tmpl.id, authProfile.id, item.clientRevision, editUpdatedAt)
@@ -3054,10 +3116,27 @@ function App() {
         } else if (item.kind === 'room_transition' && typeof payload.roomCode === 'string' && typeof payload.status === 'string' && typeof payload.at === 'string') {
           const room = rooms.find((candidate) => candidate.code === payload.roomCode) ?? normalizeRoom({ id: '', code: payload.roomCode })
           synced = await persistCloudRoomTransition(room, payload.status as RoomStatus, payload.at, false)
+          if (!synced) {
+            const hasPendingRoomCreate = pending.some(
+              (other) => other.kind === 'room' && isRecord(other.payload) && isRecord(other.payload.room) && other.payload.room.code === payload.roomCode
+            )
+            if (!hasPendingRoomCreate) {
+              const { data: existingRoom, error: roomCheckError } = await supabase
+                .from('rooms')
+                .select('id')
+                .eq('owner_id', authProfile.id)
+                .eq('code', payload.roomCode)
+                .maybeSingle()
+              if (!roomCheckError && !existingRoom) {
+                // La sala ya fue eliminada en la nube y no hay creación pendiente: limpiar transición huérfana
+                synced = true
+              }
+            }
+          }
         } else if (item.kind === 'activity_status' && typeof payload.id === 'string' && typeof payload.status === 'string') {
           const result = await supabase.from('activities').update({ status: payload.status }).eq('id', payload.id).eq('owner_id', authProfile.id)
-          synced = !result.error
-          if (synced) markSynced()
+          synced = !result.error || result.error.code === '22P02' || result.error.code === '23503'
+          if (!result.error) markSynced()
         }
 
         if (synced) {
@@ -3661,6 +3740,18 @@ function App() {
       {role !== 'student' && <aside className={`sidebar${mobileNavOpen ? ' mobile-open' : ''}`}><div className="role-label"><span className="role-icon">{role === 'admin' ? <IconAdmin size={18} /> : <IconTeacher size={18} />}</span><div><b>{role === 'admin' ? (adminScope === 'superadmin' ? 'Superadministrador' : activeInstitution.name) : 'Panel docente'}</b><small title={authSession?.user.email ?? undefined}>{authSession?.user.email ?? (role === 'admin' ? (adminScope === 'superadmin' ? 'Administración general' : activeInstitution.contactName) : 'Sesión docente')}</small></div></div><nav>{role === 'admin' ? <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label={adminScope === 'superadmin' ? 'Instituciones' : 'Resumen'} onClick={() => show('overview')} /><NavButton active={panelView === 'adminUsers'} icon={<IconUsers size={18} />} label="Directorio docente" onClick={() => show('adminUsers')} /><NavButton active={panelView === 'adminAudit'} icon={<IconAudit size={18} />} label="Auditoría" onClick={() => show('adminAudit')} /></> : <><NavButton active={panelView === 'overview'} icon={<IconHome size={18} />} label="Inicio" onClick={() => show('overview')} /><NavButton active={panelView === 'content'} icon={<IconContent size={18} />} label="Contenido" onClick={() => show('content')} /><NavButton active={panelView === 'proposals'} icon={<IconProposals size={18} />} label="Propuestas" badge={pending.length} onClick={() => show('proposals')} /><NavButton active={panelView === 'rooms'} icon={<IconRooms size={18} />} label="Salas" onClick={() => show('rooms')} /><NavButton active={panelView === 'results'} icon={<IconResults size={18} />} label="Resultados" onClick={() => show('results')} /></>}</nav><div className="sidebar-footer"><button type="button" className="help-card" onClick={() => { setMobileNavOpen(false); setShowHelpModal(true) }}><span><IconHelp size={16} /></span><p><b>¿Necesitas ayuda?</b><br />Ver la guía rápida de EvaluEdu.</p></button>{role === 'teacher' && <button type="button" className="sidebar-feedback-button" onClick={() => { setMobileNavOpen(false); setShowFeedbackModal(true) }}><span>✎</span>Escribir sugerencia</button>}<div className="sidebar-role-switches" aria-label="Cambio de panel">{canAccessPanel(authProfile, role === 'admin' ? 'teacher' : 'admin') && <a href={panelUrl(role === 'admin' ? 'teacher' : 'admin')} className="sidebar-account-button role-switch-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole(role === 'admin' ? 'teacher' : 'admin') } }} title={`Cambiar a ${role === 'admin' ? 'Panel Docente' : 'Dirección Escolar'} (clic derecho para abrir en nueva pestaña)`}><span>{role === 'admin' ? '🎓' : '🏫'}</span>{role === 'admin' ? 'Ir a Panel Docente' : 'Ir a Dirección Escolar'}</a>}<a href={panelUrl('student')} className="sidebar-account-button role-switch-link student-mode-link" onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) { e.preventDefault(); setMobileNavOpen(false); changeRole('student') } }} title="Probar tus salas como estudiante (clic derecho para abrir en nueva pestaña)"><span>📱</span>Probar como Estudiante</a></div>{authSession && <div className="sidebar-account-actions" aria-label="Opciones de cuenta">{!authSession.user.is_anonymous && <button type="button" className="sidebar-account-button" onClick={() => { setMobileNavOpen(false); setShowPasswordChange(true) }}><span>🔑</span>Cambiar contraseña</button>}<button type="button" className="sidebar-account-button danger" onClick={() => { setMobileNavOpen(false); void signOut() }}><span>↪</span>Cerrar sesión</button></div>}<small>EvaluEdu · v2.0</small></div></aside>}
       <main className="main-content">{role !== 'student' && <div className="panel-toolbar"><button className="mobile-nav-toggle" type="button" aria-label="Abrir navegación" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((current) => { const next = !current; if (next) setAssistantCloseSignal((n) => n + 1); return next })}>{mobileNavOpen ? '×' : '☰'} <span>Navegación</span></button></div>}{role === 'student' && panelView !== 'play' ? studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <StudentView room={studentRoom} roomCode={roomCode} setRoomCode={setRoomCode} studentName={studentName} setStudentName={setStudentName} onStart={joinRoom} onRefresh={() => void refreshStudentRoom(true)} onLeave={leaveStudentSession} isTester={Boolean(authSession)} /> : role === 'admin' && panelView === 'overview' ? <AdminDashboard adminScope={adminScope} setAdminScope={setAdminScope} institutions={institutions} onAddInstitution={addInstitution} onUpdateQuota={handleUpdateInstitutionQuota} onDeleteInstitution={handleDeleteInstitution} activeInstitution={activeInstitution} onSelectInstitution={setActiveInstitutionId} teachers={currentTeachers} adminData={adminSnapshot} onNavigate={show} /> : role === 'admin' && panelView === 'adminUsers' ? <AdminUsersView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} teachers={currentTeachers} profile={authProfile} adminData={adminSnapshot} onRefresh={() => loadAdminSnapshot(false)} onAddTeacher={handleAddTeacher} onToggleTeacherStatus={handleToggleTeacherStatus} onHome={() => show('overview')} /> : role === 'admin' && panelView === 'adminAudit' ? <AdminAuditView adminScope={adminScope} setAdminScope={setAdminScope} institution={activeInstitution} adminData={adminSnapshot} onHome={() => show('overview')} /> : panelView === 'overview' ? <Overview activities={published} rooms={rooms} pending={pending} templates={templates} attempts={displayedAttempts} onNavigate={show} onSelect={setSelectedActivity} firstName={firstName} todayLabel={todayLabel} /> : panelView === 'content' ? <ContentView templates={templates} activities={activities} onCreateTemplate={createTemplate} onUpdateTemplate={updateTemplate} onDeleteTemplate={deleteTemplate} onCreate={createActivity} onImport={importContent} onSelect={setSelectedActivity} onCreateRoom={(activityIds) => { setPreselectedRoomActivityIds(activityIds); show('rooms') }} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'proposals' ? <ProposalsView activities={pending} hasDraft={hasTemplateDraft} onReview={reviewActivity} onReviewBatch={reviewBatch} onEditActivity={(act) => setEditingActivity(act)} onCreateRoomFromProposals={createRoomFromProposals} onPreviewStudent={(act) => setPreviewingStudentActivity(act)} onContinueDraft={() => show('content')} onHome={() => show('overview')} /> : panelView === 'rooms' ? <RoomsView rooms={rooms} activities={activities} templates={templates} initialActivityIds={preselectedRoomActivityIds} onClearInitialActivities={() => setPreselectedRoomActivityIds(null)} onCreate={createRoom} onTransition={transitionRoom} onDuplicate={duplicateRoom} onShare={shareRoomCode} onDelete={(room) => void deleteRoom(room)} onNavigateToContent={() => show('content')} onNavigateToProposals={() => show('proposals')} onHome={() => show('overview')} /> : panelView === 'results' ? <ResultsView attempts={displayedAttempts} rooms={resultRooms} templates={templates} activities={activities} onExport={exportCsv} onDeleteAttempt={deleteAttempt} onClearAttempts={clearAttempts} onHome={() => show('overview')} /> : studentFinished ? <StudentCompletion room={studentRoom} attempt={lastStudentAttempt} activities={activities} studentResponses={studentResponses} questionOrderIds={studentQuestionIds} submissionStatus={studentSubmissionStatus} submissionError={studentSubmissionError} durableBackupOk={studentDurableBackupOk} backupError={studentBackupError} isOnline={isOnline} syncing={studentSyncing} onRetrySync={() => flushStudentSyncQueue(true)} onLeave={leaveStudentSession} /> : <PlayView activity={playActivity} index={playIndex} totalCount={studentActivities.length || 6} allowBack={studentRoom?.allowBack ?? true} timeLimit={studentRoom?.time ?? null} startedAt={studentRoom?.startedAt} savedResponse={studentResponses[playIndex]} responsesRecorded={studentResponses} onGoToQuestion={goToStudentQuestion} submitted={submitted} onSubmit={submitAnswer} onSkip={skipStudentQuestion} onPrevious={previousStudentQuestion} onTimeExpired={() => finishStudentAttempt('timeout')} onNext={nextStudentQuestion} />}</main>
     </div>{toast && <div className="toast" role="status">✓ {toast}</div>}
+    {appUpdateAvailable && (
+      <div className="app-update-banner" role="status" aria-live="polite">
+        <span>Nueva versión de EvaluEdu disponible</span>
+        <button
+          type="button"
+          className="app-update-btn"
+          onClick={() => window.location.reload()}
+        >
+          Actualizar ahora
+        </button>
+      </div>
+    )}
     {showPasswordChange && authSession && <ChangePasswordModal onClose={() => setShowPasswordChange(false)} onSaved={() => { setShowPasswordChange(false); notify('Contraseña actualizada correctamente.') }} />}
     {showHelpModal && (
       <HelpModal

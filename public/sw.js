@@ -1,4 +1,10 @@
-const VERSION = 'evaluedu-shell-v2.2.1-assistant-ui-20261127'
+const VERSION = 'evaluedu-shell-v2.2.2-auto-update-20261127'
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting()
+  }
+})
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -61,10 +67,12 @@ self.addEventListener('fetch', (event) => {
     const base = self.registration.scope
     const indexUrl = `${base}index.html`
     event.respondWith(
-      fetch(request)
+      fetch(new Request(request.url, { cache: 'no-cache' }))
         .then((response) => {
-          const copy = response.clone()
-          void caches.open(VERSION).then((cache) => cache.put(indexUrl, copy))
+          if (response.ok) {
+            const copy = response.clone()
+            void caches.open(VERSION).then((cache) => cache.put(indexUrl, copy))
+          }
           return response
         })
         .catch(() => caches.match(indexUrl)),

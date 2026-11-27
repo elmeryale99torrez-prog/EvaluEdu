@@ -1015,15 +1015,10 @@ export function TeacherAssistantWidget({
       </header>
 
       {/* Aviso breve solo cuando realmente aporta al docente */}
-      {(!context.isOnline || context.pendingSyncCount > 0 || context.role === 'student') && (
+      {(!context.isOnline || context.role === 'student') && (
         <div className="ta-status-strip">
           {!context.isOnline && (
             <span className="ta-status-pill warn">Sin conexión · Respondo dudas por texto</span>
-          )}
-          {context.pendingSyncCount > 0 && (
-            <span className="ta-status-pill info">
-              {context.pendingSyncCount} cambio{context.pendingSyncCount === 1 ? '' : 's'} por sincronizar
-            </span>
           )}
           {context.role === 'student' && (
             <span className="ta-status-pill safe">Modo prueba · Solo visible para ti</span>
