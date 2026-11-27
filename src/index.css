@@ -6998,3 +6998,12 @@ body.body-modal-locked {
 .doc-error-close:hover {
   border-color: var(--danger);
 }
+
+/* Google Drive Picker siempre por encima de los modales de EvaluEdu */
+.picker-dialog-bg {
+  z-index: 9998 !important;
+}
+
+.picker-dialog {
+  z-index: 9999 !important;
+}
