@@ -5982,6 +5982,7 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
   const [isDragging, setIsDragging] = useState(false)
   const [isReady, setIsReady] = useState(false)
   const [isLoadingDrive, setIsLoadingDrive] = useState(false)
+  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false)
   const [driveStatus, setDriveStatus] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingLabel, setProcessingLabel] = useState('Analizando documentos...')
@@ -6009,7 +6010,10 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
     setDriveStatus('Conectando con Google Drive...')
     setDocError('')
     try {
-      const filesFromDrive = await pickFilesFromGoogleDrive((status) => setDriveStatus(status))
+      const filesFromDrive = await pickFilesFromGoogleDrive({
+        onStatus: (status) => setDriveStatus(status),
+        onPickerVisibilityChange: (visible) => setIsDrivePickerOpen(visible),
+      })
       if (filesFromDrive.length > 0) {
         handleIncomingFiles(filesFromDrive)
       }
@@ -6019,6 +6023,7 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
         : 'No se pudo conectar con Google Drive en este momento.'
       setDocError(msg)
     } finally {
+      setIsDrivePickerOpen(false)
       setIsLoadingDrive(false)
       setDriveStatus('')
     }
@@ -6235,7 +6240,7 @@ function JsonImportModal({ onCancel, onImport }: { onCancel: () => void; onImpor
   }
 
   return (
-    <div className={`modal-backdrop${isLoadingDrive ? ' drive-picker-open' : ''}`}>
+    <div className={`modal-backdrop${isDrivePickerOpen ? ' drive-picker-open' : ''}`}>
       <div className="modal-card json-import-modal doc-import-modal">
         <div className="modal-head">
           <div>

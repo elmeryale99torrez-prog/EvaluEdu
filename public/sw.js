@@ -1,4 +1,4 @@
-const VERSION = 'evaluedu-shell-v2.1.1-mobile-modal-20261126'
+const VERSION = 'evaluedu-shell-v2.1.2-drive-transition-20261126'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()

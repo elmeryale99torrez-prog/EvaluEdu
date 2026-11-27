@@ -316,18 +316,30 @@ async function downloadDriveDocsAsFiles(
   return downloaded
 }
 
+export type GoogleDrivePickerCallbacks = {
+  onStatus?: (message: string) => void
+  onPickerVisibilityChange?: (visible: boolean) => void
+}
+
 /**
  * Abre la ventana oficial de Google Drive, permite seleccionar uno o varios documentos
  * (PDF, PPTX, DOCX, XLSX, TXT, Google Docs, Google Slides, Google Sheets) y los devuelve
  * como objetos `File` listos para la bandeja de importación de EvaluEdu.
  */
-export async function pickFilesFromGoogleDrive(onStatus?: (message: string) => void): Promise<File[]> {
+export async function pickFilesFromGoogleDrive(
+  callbacksOrOnStatus?: ((message: string) => void) | GoogleDrivePickerCallbacks,
+): Promise<File[]> {
+  const callbacks: GoogleDrivePickerCallbacks =
+    typeof callbacksOrOnStatus === 'function'
+      ? { onStatus: callbacksOrOnStatus }
+      : (callbacksOrOnStatus ?? {})
+
   const config = getGoogleConfig()
   if (!config.clientId || !config.apiKey) {
     throw new Error('La integración de Google Drive no está configurada.')
   }
 
-  onStatus?.('Conectando con Google Drive...')
+  callbacks.onStatus?.('Conectando con Google Drive...')
   await ensureGooglePickerLoaded()
 
   let accessToken: string
@@ -340,11 +352,18 @@ export async function pickFilesFromGoogleDrive(onStatus?: (message: string) => v
     throw err
   }
 
-  onStatus?.('Esperando tu selección en Google Drive...')
-  const selectedDocs = await openPickerModal(accessToken, config)
+  callbacks.onStatus?.('Esperando tu selección en Google Drive...')
+  callbacks.onPickerVisibilityChange?.(true)
+  let selectedDocs: GooglePickerDocument[]
+  try {
+    selectedDocs = await openPickerModal(accessToken, config)
+  } finally {
+    callbacks.onPickerVisibilityChange?.(false)
+  }
+
   if (!selectedDocs.length) {
     return []
   }
 
-  return downloadDriveDocsAsFiles(selectedDocs, accessToken, onStatus)
+  return downloadDriveDocsAsFiles(selectedDocs, accessToken, callbacks.onStatus)
 }
