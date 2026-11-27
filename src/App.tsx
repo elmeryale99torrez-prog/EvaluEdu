@@ -3790,7 +3790,12 @@ function RoleLanding({
         <RoleCard icon={<IconStudent size={26} />} title="Estudiante" description="Ingresa a una sala con el código de tu docente." onClick={() => onChoose('student')} tone="student" />
         <RoleCard icon={<IconAdmin size={26} />} title="Administrador" description="Gestiona docentes, permisos y configuración general." onClick={() => onChoose('admin')} tone="admin" />
       </div>
-      <small className="landing-note">EvaluEdu · v2.0</small>
+      <small className="landing-note">
+        EvaluEdu · v2.0 ·{' '}
+        <a href="./privacidad.html" target="_blank" rel="noopener noreferrer">Política de privacidad</a>
+        {' · '}
+        <a href="./terminos.html" target="_blank" rel="noopener noreferrer">Condiciones del servicio</a>
+      </small>
     </div>
   )
 }

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Política de Privacidad · EvaluEdu</title>
+    <link rel="icon" type="image/svg+xml" href="./icon.svg" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f3f5fa;
+        --paper: #ffffff;
+        --subtle: #edf1f7;
+        --ink: #253047;
+        --heading: #182238;
+        --muted: #536078;
+        --line: #ccd4e1;
+        --primary: #3456b2;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111315;
+          --paper: #1d2024;
+          --subtle: #25292f;
+          --ink: #e5e8ee;
+          --heading: #f5f6f9;
+          --muted: #acb5c4;
+          --line: #424852;
+          --primary: #a5b9f3;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.65;
+        padding: 32px 16px 64px;
+      }
+      main {
+        max-width: 800px;
+        margin: 0 auto;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: clamp(24px, 4vw, 44px);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 1px solid var(--line);
+      }
+      header img {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+      }
+      .eyebrow {
+        margin: 0;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      h1 {
+        margin: 4px 0 0;
+        font-size: clamp(22px, 3vw, 28px);
+        color: var(--heading);
+      }
+      h2 {
+        margin: 28px 0 10px;
+        font-size: 17px;
+        color: var(--heading);
+      }
+      p, li {
+        font-size: 14.5px;
+      }
+      ul {
+        padding-left: 20px;
+      }
+      .callout {
+        background: var(--subtle);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin: 18px 0;
+      }
+      a {
+        color: var(--primary);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+      footer {
+        margin-top: 36px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="./icon-192.png" alt="Logotipo de EvaluEdu" />
+        <div>
+          <p class="eyebrow">EVALUEDU · PROTECCIÓN DE DATOS</p>
+          <h1>Política de Privacidad</h1>
+        </div>
+      </header>
+
+      <p><strong>Última actualización:</strong> 26 de noviembre de 2026</p>
+      <p>
+        En <strong>EvaluEdu</strong> respetamos la autonomía docente y la privacidad de estudiantes, profesores e instituciones educativas. Esta política describe con total transparencia qué datos se procesan, con qué finalidad y cómo se protegen.
+      </p>
+
+      <h2>1. Privacidad estudiantil (cero cuentas)</h2>
+      <ul>
+        <li>Los estudiantes ingresan únicamente mediante el código de sala asignado por su docente y su nombre, sin crear cuentas ni contraseñas.</li>
+        <li>La sesión estudiantil utiliza un token opaco efímero (expira automáticamente a las 6 horas) almacenado únicamente mediante su hash en el servidor.</li>
+        <li>No existen rankings públicos ni exposición de respuestas individuales entre estudiantes.</li>
+      </ul>
+
+      <h2>2. Privacidad docente y autonomía de cátedra</h2>
+      <ul>
+        <li>Los docentes acceden mediante autenticación segura para gestionar sus plantillas, actividades, salas y reportes.</li>
+        <li>Los perfiles administrativos institucionales gestionan únicamente cupos y licencias docentes; <strong>no tienen acceso a salas activas, respuestas ni calificaciones</strong> de los grupos de cada docente.</li>
+      </ul>
+
+      <h2>3. Uso de datos de Google Drive (Google API Services)</h2>
+      <div class="callout">
+        <p style="margin: 0;">
+          <strong>Acceso mínimo y exclusivo al archivo seleccionado:</strong> Cuando el docente utiliza de forma voluntaria el botón <em>«Adjuntar desde Google Drive»</em>, EvaluEdu solicita únicamente el permiso restringido <code>https://www.googleapis.com/auth/drive.file</code>. EvaluEdu <strong>no puede ver, listar ni acceder al resto de archivos o carpetas</strong> de tu cuenta de Google Drive.
+        </p>
+      </div>
+      <ul>
+        <li><strong>Solo lectura en memoria del navegador:</strong> EvaluEdu realiza únicamente peticiones de lectura para extraer el texto del documento exacto seleccionado por el docente (PDF, Word, PowerPoint, Excel, Google Docs, Google Slides o texto). EvaluEdu nunca modifica, crea ni elimina archivos en tu Google Drive.</li>
+        <li><strong>Sin almacenamiento del archivo original:</strong> El archivo binario se procesa directamente en el dispositivo del docente para extraer su texto estructurado y generar propuestas de actividades formativas; el archivo original no se guarda en los servidores de EvaluEdu.</li>
+        <li><strong>Sin uso para entrenamiento ni publicidad:</strong> Los datos obtenidos a través de las APIs de Google no se venden, no se comparten con fines publicitarios ni se utilizan para entrenar modelos generalistas de inteligencia artificial.</li>
+        <li><strong>Cumplimiento con Google:</strong> El uso y transferencia de información recibida de las APIs de Google por parte de EvaluEdu cumple estrictamente con la <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener noreferrer">Política de Datos de Usuario de los Servicios de API de Google</a>, incluidos los requisitos de Uso Limitado (<em>Limited Use</em>).</li>
+      </ul>
+
+      <h2>4. Revocación de permisos y derechos del usuario</h2>
+      <p>
+        El docente puede revocar en cualquier momento el acceso concedido a EvaluEdu desde la configuración de seguridad de su cuenta en <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer">myaccount.google.com/permissions</a>. También puede eliminar sus plantillas, actividades y salas directamente desde su panel docente.
+      </p>
+
+      <h2>5. Contacto</h2>
+      <p>
+        Para consultas sobre privacidad, protección de datos o eliminación de cuenta, escribe a:
+        <a href="mailto:elmer.yale99.torrez@gmail.com">elmer.yale99.torrez@gmail.com</a>.
+      </p>
+
+      <footer>
+        <span>EvaluEdu · Plataforma de evaluación formativa</span>
+        <span>
+          <a href="./">Volver a EvaluEdu</a> ·
+          <a href="./terminos.html">Condiciones del servicio</a>
+        </span>
+      </footer>
+    </main>
+  </body>
+</html>
