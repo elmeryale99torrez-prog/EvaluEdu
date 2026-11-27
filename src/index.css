@@ -6866,9 +6866,10 @@ body.body-modal-locked {
 .doc-queue-info b {
   font-size: 13px;
   color: var(--ink-heading);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.35;
 }
 
 .doc-queue-info small {
@@ -6917,8 +6918,9 @@ body.body-modal-locked {
 }
 
 .doc-ready-check input[type="checkbox"] {
-  width: 18px !important;
-  height: 18px;
+  width: 20px !important;
+  height: 20px !important;
+  min-height: 20px !important;
   margin-top: 2px;
   flex: none;
   accent-color: var(--success);
@@ -7014,6 +7016,54 @@ body.body-modal-locked {
 
 .doc-dropzone-desktop-title {
   display: block;
+}
+
+@media (max-width: 720px) {
+  .modal-backdrop {
+    padding: 16px 12px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+  }
+  .modal-card.doc-import-modal {
+    width: 100% !important;
+    max-width: calc(100vw - 24px) !important;
+    margin: 0 auto !important;
+    padding: 18px 14px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+  .doc-import-modal .modal-head {
+    gap: 10px;
+  }
+  .doc-import-modal .modal-head > div {
+    min-width: 0;
+  }
+  .doc-import-modal .compatibility-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .doc-import-modal .compatibility-item {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .doc-queue-item {
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px;
+    flex-wrap: wrap;
+  }
+  .doc-queue-info {
+    flex: 1 1 150px;
+  }
+  .doc-analyzed-pill {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .doc-import-modal .compatibility-grid {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 @media (max-width: 640px), (pointer: coarse) {
